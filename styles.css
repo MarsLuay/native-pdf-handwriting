@@ -1,0 +1,156 @@
+.native-pdf-ink-toolbar {
+  --ink-control-size: 44px;
+  align-items: center;
+  background: var(--background-primary, #fff);
+  border: 1px solid var(--background-modifier-border, #d1d5db);
+  border-radius: 10px;
+  display: flex;
+  gap: 2px;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  padding: 4px;
+  scrollbar-width: thin;
+  touch-action: pan-x;
+}
+
+.native-pdf-ink-toolbar-button,
+.native-pdf-ink-dropdown-option,
+.native-pdf-ink-focus-header button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-normal, #111827);
+  display: inline-flex;
+  flex: 0 0 auto;
+  justify-content: center;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 6px 10px;
+}
+
+.native-pdf-ink-toolbar-button:hover,
+.native-pdf-ink-dropdown-option:hover,
+.native-pdf-ink-toolbar-button[aria-pressed="true"] {
+  background: var(--background-modifier-hover, #e5e7eb);
+}
+
+.native-pdf-ink-toolbar-button:focus-visible,
+.native-pdf-ink-dropdown-option:focus-visible {
+  outline: 2px solid var(--interactive-accent, #2563eb);
+  outline-offset: -2px;
+}
+
+.native-pdf-ink-tool-group { display: inline-flex; flex: 0 0 auto; }
+.native-pdf-ink-tool-group > :first-child { border-radius: 6px 0 0 6px; }
+.native-pdf-ink-menu-arrow { border-radius: 0 6px 6px 0; min-width: 28px; padding-inline: 4px; }
+.native-pdf-ink-toolbar-button[data-control="color"] { box-shadow: inset 0 -4px var(--ink-current-color, transparent); }
+
+.native-pdf-ink-dropdown {
+  background: var(--background-primary, #fff);
+  border: 1px solid var(--background-modifier-border, #d1d5db);
+  border-radius: 10px;
+  box-shadow: 0 8px 30px rgb(0 0 0 / 22%);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  max-width: calc(100vw - 16px);
+  min-width: min(260px, calc(100vw - 16px));
+  overflow: auto;
+  padding: 6px;
+  position: fixed;
+  width: max-content;
+  z-index: 10001;
+}
+
+.native-pdf-ink-dropdown-option { justify-content: flex-start; width: 100%; }
+.native-pdf-ink-dropdown-option[aria-checked="true"]::after { content: "✓"; margin-left: auto; }
+.native-pdf-ink-dropdown-option:disabled { opacity: .45; }
+.native-pdf-ink-color-swatch { border: 1px solid rgb(0 0 0 / 25%); border-radius: 50%; height: 20px; margin-right: 8px; width: 20px; }
+.native-pdf-ink-width-preview { background: var(--ink-preview-color); border-radius: 999px; height: var(--ink-preview-width); margin-right: 8px; min-width: 56px; }
+.native-pdf-ink-advanced { border-top: 1px solid var(--background-modifier-border, #d1d5db); padding: 8px; }
+.native-pdf-ink-advanced label { align-items: center; display: flex; gap: 8px; justify-content: space-between; min-height: 36px; }
+
+.native-pdf-ink-save-status { flex: 0 0 auto; font-size: .8em; padding: 0 6px; white-space: nowrap; }
+.native-pdf-ink-save-status[data-status="failed"] { color: var(--text-error, #b91c1c); }
+.native-pdf-ink-save-status[data-status="dirty"] { color: var(--text-warning, #92400e); }
+
+.native-pdf-ink-page-overlay {
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  touch-action: auto;
+  z-index: 4;
+}
+.native-pdf-ink-canvas { display: block; inset: 0; pointer-events: none; position: absolute; }
+
+.native-pdf-ink-selection-toolbar {
+  align-items: center;
+  background: var(--background-primary, #fff);
+  border: 1px solid var(--background-modifier-border, #d1d5db);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 20%);
+  display: flex;
+  gap: 4px;
+  left: 8px;
+  max-width: calc(100% - 16px);
+  padding: 4px;
+  pointer-events: auto;
+  position: absolute;
+  top: 8px;
+  z-index: 2;
+}
+.native-pdf-ink-selection-toolbar[hidden] { display: none; }
+.native-pdf-ink-selection-toolbar button,
+.native-pdf-ink-selection-toolbar input { min-height: 44px; min-width: 44px; }
+
+.native-pdf-ink-focus-backdrop {
+  align-items: center;
+  background: rgb(0 0 0 / 55%);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  overflow: hidden;
+  padding: 8px;
+  position: fixed;
+  z-index: 10000;
+}
+.native-pdf-ink-focus-panel { background: var(--background-primary, #fff); border-radius: 10px; display: flex; flex-direction: column; height: calc(100dvh - 16px); max-width: 1200px; min-width: 0; overflow: hidden; width: 100%; }
+.native-pdf-ink-focus-header { align-items: center; display: flex; flex: 0 0 auto; gap: 4px; padding: 4px 8px; }
+.native-pdf-ink-focus-header strong { margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.native-pdf-ink-focus-content { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.native-pdf-ink-debug { background: var(--background-secondary, #f3f4f6); font-size: 11px; max-width: 100%; overflow: auto; padding: 8px; }
+
+.native-pdf-ink-support-links {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  margin-top: 24px;
+  padding-top: 16px;
+}
+
+.native-pdf-ink-support-link {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  text-decoration: none;
+}
+
+.native-pdf-ink-support-link:hover,
+.native-pdf-ink-support-link:focus {
+  color: var(--text-accent);
+  text-decoration: underline;
+}
+
+@media (min-width: 700px) {
+  .native-pdf-ink-focus-backdrop { padding: 24px; }
+  .native-pdf-ink-focus-panel { height: min(92dvh, 1000px); }
+  .native-pdf-ink-dropdown { max-width: 360px; }
+}
+
+@media (max-width: 480px) {
+  .native-pdf-ink-save-status { clip-path: inset(50%); height: 1px; overflow: hidden; position: absolute; width: 1px; }
+  .native-pdf-ink-toolbar-button { padding-inline: 7px; }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "obsidian-native-pdf-ink",
+  "version": "0.1.0",
+  "description": "Local-first handwriting and annotation for Obsidian's PDF viewer.",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc --noEmit && node esbuild.config.mjs production",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "smoke": "vitest run tests/integration-adapters-focus.test.ts tests/runtime-viewer-session.test.ts tests/core-storage.test.ts"
+  },
+  "keywords": ["obsidian", "pdf", "handwriting", "annotation"],
+  "license": "MIT",
+  "dependencies": {
+    "pdf-lib": "^1.17.1",
+    "perfect-freehand": "^1.2.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.17",
+    "esbuild": "^0.25.5",
+    "jsdom": "^26.1.0",
+    "obsidian": "latest",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}
