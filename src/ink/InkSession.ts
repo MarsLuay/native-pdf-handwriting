@@ -13,8 +13,10 @@ export class InkSession {
     return undefined;
   }
   replace(stroke: InkStroke): void { this.remove(stroke.id); this.add(stroke); }
+  replacePage(page: number, strokes: readonly InkStroke[]): void {
+    this.byPage.set(page, [...strokes]);
+  }
   page(page: number): readonly InkStroke[] { return this.byPage.get(page) ?? []; }
   all(): InkStroke[] { return [...this.byPage.values()].flat(); }
   clear(): void { this.byPage.clear(); }
 }
-

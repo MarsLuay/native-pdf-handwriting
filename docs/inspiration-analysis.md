@@ -135,9 +135,9 @@ Each session needs one disposal stack: PDF.js `off` callbacks, DOM listeners/`Ab
 
 ### `pdf-lib`
 
-**Verified.** `Inspiration/pdf-lib/src/api/PDFDocument.ts` exposes `PDFDocument.load`, `copyPages`, and `save`; `src/api/PDFPage.ts` exposes `drawSvgPath`; `src/api/svgPath.ts` supports path conversion. The library produces PDF bytes in memory; it does not provide the vault-level temporary-file, fsync/rename, backup, or reopen-validation transaction required by YOLO Mode.
+**Verified.** `Inspiration/pdf-lib/src/api/PDFDocument.ts` exposes `PDFDocument.load`, `copyPages`, and `save`; `src/api/PDFPage.ts` exposes `drawSvgPath`; `src/api/svgPath.ts` supports path conversion. The library produces PDF bytes in memory; Obsidian vault atomic replace remains separate from export.
 
-**Adopt.** Evaluate the MIT library inside `PdfExportService`: load the original, draw vector paths with explicit PDF-page transforms, save to a new byte array, write an exported copy, and reopen/parse it for validation. YOLO Mode may use the same renderer only inside a separate backup/temp/validate/replace transaction.
+**Adopt.** Evaluate the MIT library inside `PdfExportService`: load the original, draw vector paths with explicit PDF-page transforms, save to a new byte array, write an exported copy, and reopen/parse it for validation.
 
 **Do not adopt.** Do not rewrite the source PDF during ordinary live editing, treat `save()` as an atomic file operation, or rely on export bytes as the editable stroke model.
 
@@ -148,5 +148,5 @@ Each session needs one disposal stack: PDF.js `off` callbacks, DOM listeners/`Ab
 3. Native viewer search, outline, zoom, navigation, links, and text layers remain authoritative; annotation input intercepts only confirmed editing gestures.
 4. Sidecar JSON is canonical and versioned. Autosave is command-triggered, debounced, per-document serialized, retryable, and flushable. UI/tool preferences and transient popover state are not sidecar data.
 5. Rendering libraries are replaceable. Canonical strokes retain normalized centerline points, pressure/tilt/tool metadata, page dimensions, and rotation; generated outlines are caches.
-6. Export is non-destructive. YOLO Mode is a separate opt-in transaction with backup, temporary output, validation, atomic replacement, and retained recovery state.
+6. Export is non-destructive. Annotated copies are written separately; source PDFs are never replaced by this plugin.
 7. Reversible cleanup is a release criterion: no session may retain patches, event-bus listeners, DOM listeners, observers, overlays, toolbar nodes, popovers, timers, pointer captures, pending writes, or viewer references after disposal.

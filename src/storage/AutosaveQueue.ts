@@ -48,13 +48,43 @@ export class AutosaveQueue<T> {
     return entry !== undefined && entry.savedVersion < entry.version;
   }
 
+  /** Mark current queued snapshot as saved without writing (after a sync emergency persist). */
+  markClean(documentId: string): void {
+    const entry = this.entries.get(documentId);
+    if (!entry) return;
+    if (entry.timer) {
+      clearTimeout(entry.timer);
+      entry.timer = undefined;
+    }
+    entry.savedVersion = entry.version;
+    this.setStatus(documentId, entry, "saved");
+  }
+
+  /**
+   * Stop timers and refuse further drains/writes without flushing.
+   * Used when a newer session owns the document or plugin unload already synced disk.
+   */
+  abandon(): void {
+    this.closed = true;
+    for (const [documentId, entry] of this.entries) {
+      if (entry.timer) {
+        clearTimeout(entry.timer);
+        entry.timer = undefined;
+      }
+      entry.savedVersion = entry.version;
+      this.setStatus(documentId, entry, "saved");
+    }
+  }
+
   async retry(documentId: string): Promise<void> {
+    if (this.closed) return;
     const entry = this.entries.get(documentId);
     if (!entry || !this.isDirty(documentId)) return;
     await this.drain(documentId, entry);
   }
 
   async flush(documentId?: string): Promise<void> {
+    if (this.closed) return;
     if (documentId !== undefined) {
       const entry = this.entries.get(documentId);
       if (!entry) return;
@@ -65,18 +95,26 @@ export class AutosaveQueue<T> {
     await Promise.all([...this.entries.keys()].map((id) => this.flush(id)));
   }
 
-  async close(): Promise<void> { await this.flush(); this.closed = true; }
+  async close(): Promise<void> {
+    // Flush only if still open and dirty; abandoned queues must not write.
+    if (!this.closed) await this.flush();
+    this.closed = true;
+  }
 
   private async drain(documentId: string, entry: Entry<T>): Promise<void> {
-    if (entry.running) { await entry.running; if (entry.savedVersion < entry.version) await this.drain(documentId, entry); return; }
+    if (this.closed) return;
+    if (entry.running) { await entry.running; if (!this.closed && entry.savedVersion < entry.version) await this.drain(documentId, entry); return; }
     if (entry.savedVersion >= entry.version) return;
+    if (this.closed) return;
     const targetVersion = entry.version;
     const snapshot = entry.snapshot;
     this.setStatus(documentId, entry, "saving");
     entry.running = this.options.write(documentId, snapshot).then(() => {
+      if (this.closed) return;
       entry.savedVersion = Math.max(entry.savedVersion, targetVersion);
       this.setStatus(documentId, entry, entry.savedVersion < entry.version ? "dirty" : "saved");
     }).catch((error: unknown) => {
+      if (this.closed) return;
       this.setStatus(documentId, entry, "failed", error);
       if (this.options.retryFailed) {
         entry.timer = setTimeout(() => { entry.timer = undefined; void this.drain(documentId, entry).catch(() => undefined); }, this.options.retryDelayMs ?? this.delayMs);
@@ -84,7 +122,7 @@ export class AutosaveQueue<T> {
       throw error;
     }).finally(() => { entry.running = undefined; });
     await entry.running;
-    if (entry.savedVersion < entry.version && entry.status !== "failed") await this.drain(documentId, entry);
+    if (!this.closed && entry.savedVersion < entry.version && entry.status !== "failed") await this.drain(documentId, entry);
   }
 
   private setStatus(documentId: string, entry: Entry<T>, status: SaveStatus, error?: unknown): void {

@@ -1,4 +1,6 @@
+import type { ViewStateSource } from "../logging/SessionLogger";
 import type { PdfPageInfo } from "./PdfPageLocator";
+import type { ToolbarPlacement } from "../model";
 
 export interface PdfViewState {
   pageNumber: number;
@@ -8,19 +10,26 @@ export interface PdfViewState {
 }
 
 export interface PdfAdapterCallbacks {
-  onViewStateChange?(state: PdfViewState): void;
-  onPagesChanged?(): void;
+  onViewStateChange?(state: PdfViewState, source: ViewStateSource): void;
+  onPagesChanged?(reason: string): void;
   onCompatibilityWarning?(message: string): void;
 }
 
 export interface ObsidianPdfAdapter {
   readonly kind: "direct" | "embedded";
+  readonly host: HTMLElement;
   readonly root: HTMLElement;
   pages(): PdfPageInfo[];
   getViewState(): PdfViewState;
   restoreViewState(state: PdfViewState): void;
+  scrollElement(): HTMLElement;
   mountOverlay(pageNumber: number): HTMLElement;
-  mountToolbar(toolbar: HTMLElement): void;
+  mountToolbar(toolbar: HTMLElement, placement?: ToolbarPlacement): void;
+  setScale?(scale: number): boolean;
+  setScaleValue?(value: string | number): boolean;
+  zoomBySteps?(steps: number): boolean;
+  maxScale?(): number;
+  compatibilityReport(): { errors: string[]; warnings: string[] };
   destroy(): void;
 }
 

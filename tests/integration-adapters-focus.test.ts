@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FocusOverlay } from "../src/focus-view/FocusOverlay";
 import { EmbeddedPdfAdapter } from "../src/integration/EmbeddedPdfAdapter";
 import { NativePdfViewAdapter } from "../src/integration/NativePdfViewAdapter";
 
@@ -14,8 +13,12 @@ function pdfViewer(): HTMLElement {
   page.dataset.scale = "1.5";
   page.dataset.rotation = "90";
   const canvas = document.createElement("canvas");
-  canvas.width = 900;
-  canvas.height = 1200;
+  canvas.width = 2400;
+  canvas.height = 1800;
+  page.getBoundingClientRect = () => ({
+    x: 0, y: 0, left: 0, top: 0, right: 1200, bottom: 900,
+    width: 1200, height: 900, toJSON: () => ({})
+  });
   page.append(canvas);
   viewer.append(page);
   return viewer;
@@ -46,13 +49,67 @@ describe("PDF adapters", () => {
     const overlay = adapter.mountOverlay(1);
     const toolbar = document.createElement("div");
     adapter.mountToolbar(toolbar);
-    adapter.root.dispatchEvent(new Event("scroll"));
+    adapter.scrollElement().dispatchEvent(new Event("scroll"));
     expect(stateChanges).toHaveBeenCalledOnce();
     adapter.destroy();
     expect(overlay.isConnected).toBe(false);
     expect(toolbar.isConnected).toBe(false);
     adapter.root.dispatchEvent(new Event("scroll"));
     expect(stateChanges).toHaveBeenCalledOnce();
+  });
+
+  it("replaces stale annotation toolbars when mounting again", () => {
+    const host = compatibleHost();
+    const adapter = NativePdfViewAdapter.attach(host);
+    const stale = document.createElement("div");
+    stale.className = "native-pdf-ink-toolbar";
+    const fresh = document.createElement("div");
+    fresh.className = "native-pdf-ink-toolbar";
+    adapter.mountToolbar(stale);
+    adapter.mountToolbar(fresh);
+    const toolbars = host.querySelectorAll(".native-pdf-ink-toolbar");
+    expect(toolbars).toHaveLength(1);
+    expect(toolbars[0]).toBe(fresh);
+    adapter.destroy();
+  });
+
+  it("ignores selection toolbar mount inside overlay", () => {
+    const host = compatibleHost();
+    const pageChanges = vi.fn();
+    const adapter = NativePdfViewAdapter.attach(host, { onPagesChanged: pageChanges });
+    const overlay = adapter.mountOverlay(1);
+    const toolbar = document.createElement("div");
+    toolbar.className = "native-pdf-ink-selection-toolbar";
+    toolbar.dataset.focusOverlayInternal = "true";
+    overlay.append(toolbar);
+    expect(pageChanges).not.toHaveBeenCalled();
+    adapter.destroy();
+  });
+
+  it("ignores annotation overlay mutations when watching page changes", () => {
+    const host = compatibleHost();
+    const pageChanges = vi.fn();
+    const adapter = NativePdfViewAdapter.attach(host, { onPagesChanged: pageChanges });
+    adapter.mountOverlay(1);
+    expect(pageChanges).not.toHaveBeenCalled();
+    adapter.destroy();
+  });
+
+  it("routes data-scale attribute changes to view state instead of page remounts", async () => {
+    const host = compatibleHost();
+    const pageChanges = vi.fn();
+    const stateChanges = vi.fn();
+    const adapter = NativePdfViewAdapter.attach(host, {
+      onPagesChanged: pageChanges,
+      onViewStateChange: stateChanges
+    });
+    const page = host.querySelector(".page") as HTMLElement;
+    page.dataset.scale = "2";
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    expect(pageChanges).not.toHaveBeenCalled();
+    expect(stateChanges).toHaveBeenCalled();
+    expect(stateChanges.mock.calls.at(-1)?.[1]).toBe("data-scale");
+    adapter.destroy();
   });
 
   it("discovers embedded PDFs", () => {
@@ -64,37 +121,89 @@ describe("PDF adapters", () => {
     note.append(embed);
     expect(EmbeddedPdfAdapter.discover(note)).toHaveLength(1);
   });
-});
 
-describe("focus overlay", () => {
-  it("ignores internal/portaled controls and dismisses outside after flushing", async () => {
-    const flush = vi.fn(async () => undefined);
-    const closed = vi.fn();
-    const overlay = new FocusOverlay({ document, autosave: () => true, isDirty: () => true, flush, decideUnsaved: vi.fn(), onClosed: closed });
-    overlay.content.dispatchEvent(new Event("pointerdown", { bubbles: true }));
-    expect(overlay.element.isConnected).toBe(true);
-    const portal = document.createElement("button");
-    portal.dataset.focusOverlayInternal = "true";
-    document.body.append(portal);
-    portal.dispatchEvent(new Event("pointerdown", { bubbles: true }));
-    expect(overlay.element.isConnected).toBe(true);
-    const outside = document.createElement("div");
-    document.body.append(outside);
-    outside.dispatchEvent(new Event("pointerdown", { bubbles: true }));
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(flush).toHaveBeenCalledOnce();
-    expect(closed).toHaveBeenCalledWith("outside");
-    expect(overlay.element.isConnected).toBe(false);
+  it("ignores PDF++ DOM mutations when watching page changes", async () => {
+    const host = compatibleHost();
+    const pageChanges = vi.fn();
+    const adapter = NativePdfViewAdapter.attach(host, { onPagesChanged: pageChanges });
+    const page = host.querySelector(".page") as HTMLElement;
+    const layer = document.createElement("div");
+    layer.className = "pdf-plus-backlink-highlight-layer";
+    page.append(layer);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    expect(pageChanges).not.toHaveBeenCalled();
+    adapter.destroy();
   });
 
-  it("honors cancel and save decisions when autosave is off", async () => {
-    const flush = vi.fn(async () => undefined);
-    const decide = vi.fn().mockResolvedValueOnce("cancel").mockResolvedValueOnce("save");
-    const overlay = new FocusOverlay({ document, autosave: () => false, isDirty: () => true, flush, decideUnsaved: decide });
-    expect(await overlay.requestClose("escape")).toBe(false);
-    expect(overlay.element.isConnected).toBe(true);
-    expect(await overlay.requestClose("close-button")).toBe(true);
-    expect(flush).toHaveBeenCalledOnce();
+  it("mounts annotation toolbar after PDF++ color palette", () => {
+    const host = compatibleHost();
+    const toolbarHost = host.querySelector(".pdf-toolbar") as HTMLElement;
+    const palette = document.createElement("div");
+    palette.className = "pdf-plus-color-palette";
+    toolbarHost.append(palette);
+    const adapter = NativePdfViewAdapter.attach(host);
+    const toolbar = document.createElement("div");
+    toolbar.className = "native-pdf-ink-toolbar";
+    adapter.mountToolbar(toolbar);
+    expect(palette.nextSibling).toBe(toolbar);
+    adapter.destroy();
+  });
+
+  it("keeps sidebar rail outside the PDF scroll container", () => {
+    const host = document.createElement("div");
+    host.className = "workspace-leaf";
+    const toolbarHost = document.createElement("div");
+    toolbarHost.className = "pdf-toolbar";
+    const scroll = document.createElement("div");
+    scroll.className = "pdf-viewer-scroll-container";
+    Object.defineProperty(scroll, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(scroll, "clientHeight", { value: 600, configurable: true });
+    scroll.append(pdfViewer());
+    host.append(toolbarHost, scroll);
+    document.body.append(host);
+
+    const adapter = NativePdfViewAdapter.attach(host);
+    const toolbar = document.createElement("div");
+    toolbar.className = "native-pdf-ink-toolbar";
+    adapter.mountToolbar(toolbar, "left");
+
+    const chrome = host.querySelector(".native-pdf-ink-chrome");
+    const rail = host.querySelector(".native-pdf-ink-rail");
+    expect(chrome).not.toBeNull();
+    expect(chrome?.classList.contains("is-toolbar-left")).toBe(true);
+    expect(rail?.parentElement).toBe(chrome);
+    expect(scroll.parentElement).toBe(chrome);
+    expect(scroll.contains(rail!)).toBe(false);
+    expect(chrome?.contains(adapter.root)).toBe(true);
+    adapter.destroy();
+  });
+
+  it("pins right sidebar with chrome grid class even when remounting", () => {
+    const host = document.createElement("div");
+    host.className = "workspace-leaf";
+    const toolbarHost = document.createElement("div");
+    toolbarHost.className = "pdf-toolbar";
+    const scroll = document.createElement("div");
+    scroll.className = "pdf-viewer-scroll-container";
+    Object.defineProperty(scroll, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(scroll, "clientHeight", { value: 600, configurable: true });
+    scroll.append(pdfViewer());
+    host.append(toolbarHost, scroll);
+    document.body.append(host);
+
+    const adapter = NativePdfViewAdapter.attach(host);
+    const toolbar = document.createElement("div");
+    toolbar.className = "native-pdf-ink-toolbar";
+    adapter.mountToolbar(toolbar, "left");
+    adapter.mountToolbar(toolbar, "right");
+
+    const chrome = host.querySelector(".native-pdf-ink-chrome");
+    const rail = host.querySelector(".native-pdf-ink-rail");
+    expect(chrome?.classList.contains("is-toolbar-right")).toBe(true);
+    expect(chrome?.classList.contains("is-toolbar-left")).toBe(false);
+    expect(rail?.classList.contains("is-right")).toBe(true);
+    expect(toolbar.classList.contains("is-sidebar-right")).toBe(true);
+    expect(rail?.parentElement?.lastElementChild).toBe(rail);
+    adapter.destroy();
   });
 });

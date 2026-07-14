@@ -1,64 +1,16 @@
-import { App, Modal, Notice, PluginSettingTab, Setting } from "obsidian";
-import { DEFAULT_SETTINGS, serializePluginSettings, type PluginSettings } from "./model";
+import { Notice, Plugin, PluginSettingTab, Setting } from "obsidian";
+import { DEFAULT_SETTINGS, mergeSettings, serializePluginSettings, type PluginSettings } from "./model";
+
+export { mergeSettings, DEFAULT_SETTINGS };
 
 export interface SettingsHost {
-  app: App;
   settings: PluginSettings;
   saveSettings(settings: PluginSettings): Promise<void>;
 }
 
-export function mergeSettings(saved: Partial<PluginSettings> | null | undefined): PluginSettings {
-  return {
-    ...DEFAULT_SETTINGS,
-    ...saved,
-    toolPreferences: {
-      ...DEFAULT_SETTINGS.toolPreferences,
-      ...saved?.toolPreferences,
-      pen: { ...DEFAULT_SETTINGS.toolPreferences.pen, ...saved?.toolPreferences?.pen },
-      pencil: { ...DEFAULT_SETTINGS.toolPreferences.pencil, ...saved?.toolPreferences?.pencil },
-      eraser: { ...DEFAULT_SETTINGS.toolPreferences.eraser, ...saved?.toolPreferences?.eraser },
-      lasso: { ...DEFAULT_SETTINGS.toolPreferences.lasso, ...saved?.toolPreferences?.lasso }
-    }
-  };
-}
-
-class YoloConfirmationModal extends Modal {
-  private readonly abort = new AbortController();
-  constructor(app: App, private readonly onConfirm: () => Promise<void>) {
-    super(app);
-  }
-
-  onOpen(): void {
-    this.titleEl.setText("Enable YOLO Mode?");
-    this.contentEl.createEl("p", {
-      text: "YOLO Mode modifies the original PDF. Changes may not be reversible outside this plugin. PDF corruption, incomplete writes, and sync conflicts are possible. Keep backups or file history enabled."
-    });
-    const actions = this.contentEl.createDiv({ cls: "native-pdf-ink-confirm-actions" });
-    const cancel = actions.createEl("button", { text: "Keep originals safe" });
-    const confirm = actions.createEl("button", {
-      text: "I understand — enable YOLO Mode",
-      cls: "mod-warning"
-    });
-    cancel.addEventListener("click", () => this.close(), { signal: this.abort.signal });
-    confirm.addEventListener("click", () => {
-      void this.onConfirm()
-        .then(() => this.close())
-        .catch((error) => {
-          console.error("Native PDF Ink could not enable YOLO Mode", error);
-          new Notice("Could not enable YOLO Mode. Your original PDF remains unchanged.");
-        });
-    }, { signal: this.abort.signal });
-  }
-
-  onClose(): void {
-    this.abort.abort();
-    this.contentEl.empty();
-  }
-}
-
 export class NativePdfInkSettingTab extends PluginSettingTab {
-  constructor(app: App, private readonly host: SettingsHost) {
-    super(app, host as never);
+  constructor(app: ConstructorParameters<typeof PluginSettingTab>[0], private readonly host: Plugin & SettingsHost) {
+    super(app, host);
   }
 
   display(): void {
@@ -66,7 +18,7 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.createEl("h2", { text: "Native PDF Ink" });
     containerEl.createEl("p", {
-      text: "Annotations stay local in an editable sidecar. Your original PDF remains unchanged unless you explicitly enable YOLO Mode."
+      text: "Locally handwrite on PDFs with a stylus or mouse inside Obsidian."
     });
 
     new Setting(containerEl)
@@ -107,6 +59,42 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
         })
       );
 
+    containerEl.createEl("h3", { text: "PDF navigation" });
+    new Setting(containerEl)
+      .setName("Drag to scroll when Draw is off")
+      .setDesc("Vertical mouse drag on empty PDF areas scrolls the document. Text selection and links still work normally.")
+      .addToggle((toggle) =>
+        toggle.setValue(this.host.settings.mouseDragScroll).onChange(async (value) => {
+          await this.persistPatch({ mouseDragScroll: value });
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Ink toolbar placement")
+      .setDesc("Put the ink controls on the PDF toolbar, or as a left/right sidebar beside the pages.")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("main", "PDF toolbar (default)")
+          .addOption("left", "Left sidebar")
+          .addOption("right", "Right sidebar")
+          .setValue(this.host.settings.toolbarPlacement)
+          .onChange(async (value) => {
+            if (value === "main" || value === "left" || value === "right") {
+              await this.persistPatch({ toolbarPlacement: value });
+            }
+          })
+      );
+
+    containerEl.createEl("h3", { text: "Drawing" });
+    new Setting(containerEl)
+      .setName("Simplify strokes on release")
+      .setDesc("Snap finished ink to cleaner straight segments. Off keeps the exact path you drew.")
+      .addToggle((toggle) =>
+        toggle.setValue(this.host.settings.simplifyStrokes).onChange(async (value) => {
+          await this.persistPatch({ simplifyStrokes: value });
+        })
+      );
+
     new Setting(containerEl)
       .setName("Retry failed autosaves")
       .setDesc("Try saving again after an automatic save fails.")
@@ -116,66 +104,22 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
         })
       );
 
-    containerEl.createEl("h3", { text: "Direct PDF modification" });
+    containerEl.createEl("h3", { text: "Developer" });
     new Setting(containerEl)
-      .setName("YOLO Mode")
-      .setDesc("Dangerous: write committed annotations into the original PDF. Off by default.")
+      .setName("Vault debug log")
+      .setDesc("Append every Native PDF Ink event to a vault NDJSON log file so agents can read it directly. Off by default.")
       .addToggle((toggle) =>
-        toggle.setValue(this.host.settings.yoloMode).onChange(async (value) => {
-          if (!value) {
-            await this.persistPatch({ yoloMode: false });
-            return;
-          }
-          if (this.host.settings.yoloConfirmed) {
-            await this.persistPatch({ yoloMode: true });
-            return;
-          }
-          toggle.setValue(false);
-          new YoloConfirmationModal(this.app, async () => {
-            await this.persistPatch({ yoloMode: true, yoloConfirmed: true });
-            new Notice("YOLO Mode enabled. Backups remain on by default.");
-            this.display();
-          }).open();
+        toggle.setValue(this.host.settings.vaultDebugLog).onChange(async (value) => {
+          await this.persistPatch({ vaultDebugLog: value });
         })
       );
 
-    const yoloDelaySetting = new Setting(containerEl)
-      .setName("YOLO Mode autosave delay")
-      .setDesc("Wait 500–300,000 milliseconds to batch direct PDF rewrites.");
-    this.addDelayInput(yoloDelaySetting, {
-      descriptionId: "native-pdf-ink-yolo-delay-description",
-      value: this.host.settings.yoloAutosaveDelayMs,
-      min: 500,
-      max: 300_000,
-      persist: async (yoloAutosaveDelayMs) => this.persistPatch({ yoloAutosaveDelayMs })
-    });
-
     new Setting(containerEl)
-      .setName("Create backup before direct modification")
-      .setDesc("Enabled by default, including before first YOLO Mode write.")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.host.settings.createBackupBeforeDirectModification)
-          .onChange(async (value) => {
-            await this.persistPatch({ createBackupBeforeDirectModification: value });
-          })
-      );
-
-    new Setting(containerEl)
-      .setName("Backup location")
-      .setDesc("Vault folder used for backups before YOLO Mode changes the original PDF.")
+      .setName("Vault debug log path")
+      .setDesc("Relative vault path for the log file. One JSON object per line.")
       .addText((text) =>
-        text.setValue(this.host.settings.backupLocation).onChange(async (value) => {
-          if (value.trim()) await this.persistPatch({ backupLocation: value.trim() });
-        })
-      );
-
-    new Setting(containerEl)
-      .setName("Retain sidecar after direct modification")
-      .setDesc("Keep editable strokes and recovery data after the PDF write succeeds.")
-      .addToggle((toggle) =>
-        toggle.setValue(this.host.settings.retainSidecarAfterDirectModification).onChange(async (value) => {
-          await this.persistPatch({ retainSidecarAfterDirectModification: value });
+        text.setValue(this.host.settings.vaultDebugLogPath).onChange(async (value) => {
+          if (value.trim()) await this.persistPatch({ vaultDebugLogPath: value.trim() });
         })
       );
 
@@ -245,7 +189,7 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
   }
 
   private async persistPatch(patch: Partial<PluginSettings>): Promise<void> {
-    this.host.settings = { ...this.host.settings, ...patch };
-    await this.host.saveSettings(this.host.settings);
+    // Do not assign host.settings before saveSettings — it compares previous placement to remount open PDFs.
+    await this.host.saveSettings({ ...this.host.settings, ...patch });
   }
 }

@@ -15,18 +15,3 @@ export interface DebugState {
   lastSavedAt?: string;
   pending?: boolean;
 }
-
-export class DebugPanel {
-  readonly element: HTMLElement;
-
-  constructor(document: Document = window.document) {
-    this.element = document.createElement("pre");
-    this.element.className = "native-pdf-ink-debug";
-    this.element.dataset.focusOverlayInternal = "true";
-    this.update({});
-  }
-
-  update(state: DebugState): void {
-    this.element.textContent = JSON.stringify(state, null, 2);
-  }
-}

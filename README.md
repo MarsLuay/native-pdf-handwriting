@@ -1,16 +1,16 @@
 # Native PDF Ink
 
-Handwrite and annotate PDFs inside Obsidian. Original PDFs stay unchanged by default.
+Locally handwrite on PDFs with a stylus or mouse inside Obsidian.
 
 ## First pass
 
 - Direct PDF ink overlay with pen-aware input
 - Shared compact toolbar and accessible dropdowns
-- Pen, distinct pencil, stroke eraser, lasso definitions, color, size, stabilization
+- Explicit Draw checkbox; off by default so Sidecar Apple Pencil input behaves like a normal mouse
+- Pen, distinct pencil, circular eraser, lasso tools, color, size, stabilization
 - PDF-space sidecar JSON with migrations and recovery
 - Autosave on by default; manual Save and close protection when disabled
-- Separate annotated-copy export
-- YOLO Mode off by default, explicit warning, backups, validated transactional design
+- Separate annotated-copy export (original PDF never modified)
 - Desktop/mobile compatibility adapters and cleanup guards
 
 ## Development
@@ -29,7 +29,7 @@ See `docs/manual-test-checklist.md` before trusting private PDF-view integration
 
 - **Save active PDF annotations** (`save-active-pdf-annotations`) saves the open PDF's sidecar now.
 - **Export active annotated PDF** (`export-active-annotated-pdf`) creates a separate annotated copy.
-- **Toggle active PDF ink debug information** (`toggle-active-pdf-ink-debug`) shows or hides compatibility details.
+- **Select all PDF ink** (`select-all-pdf-ink`) selects ink on the current page when Draw is on. In command palette only; Cmd/Ctrl+A still selects PDF text when Draw is off.
 
 Settings ends with **Copy all settings**, which copies a readable local JSON snapshot for support or backup.
 

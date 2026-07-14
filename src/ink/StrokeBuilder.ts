@@ -23,11 +23,19 @@ export class StrokeBuilder {
     this.points.push({ ...point, pressure: Math.max(0, Math.min(1, point.pressure)) });
   }
 
-  preview(): readonly PdfPoint[] { return this.points; }
+  preview(simplifyEnabled = true): readonly PdfPoint[] {
+    if (!simplifyEnabled) return this.points.map((point) => ({ ...point }));
+    return stabilizePoints(this.points, this.options.stabilization ?? "off");
+  }
 
-  finish(): InkStroke {
+  finish(simplifyEnabled = true): InkStroke {
     if (this.points.length === 0) throw new Error("Cannot finish an empty stroke");
-    const processed = simplifyPoints(stabilizePoints(this.points, this.options.stabilization ?? "off"), this.options.simplifyTolerance ?? 0.35);
+    const processed = simplifyEnabled
+      ? simplifyPoints(
+        stabilizePoints(this.points, this.options.stabilization ?? "off"),
+        this.options.simplifyTolerance ?? 0.35
+      )
+      : this.points.map((point) => ({ ...point }));
     const now = (this.options.now ?? (() => new Date().toISOString()))();
     return {
       id: this.options.id, page: this.options.page, tool: this.options.tool,
@@ -36,4 +44,3 @@ export class StrokeBuilder {
     };
   }
 }
-

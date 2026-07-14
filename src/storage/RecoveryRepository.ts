@@ -4,7 +4,11 @@ import { parseSidecar, serializeSidecar, type SidecarSchemaV1 } from "./SidecarS
 export class RecoveryRepository {
   constructor(private readonly files: TextFileAdapter, private readonly folder: string) {}
 
-  private path(id: string): string { return `${this.folder.replace(/\/$/, "")}/${id.replace(/[^\w.-]/g, "_")}.recovery.json`; }
+  pathFor(id: string): string {
+    return `${this.folder.replace(/\/$/, "")}/${id.replace(/[^\w.-]/g, "_")}.recovery.json`;
+  }
+
+  private path(id: string): string { return this.pathFor(id); }
 
   async save(data: SidecarSchemaV1): Promise<void> { await this.files.write(this.path(data.document.id), serializeSidecar(data)); }
   async load(id: string): Promise<SidecarSchemaV1 | null> {

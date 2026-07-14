@@ -24,9 +24,9 @@ The plugin processes your content locally. You are responsible for permission to
 
 This repository does not charge payments, subscriptions, or billing fees. Therefore it provides no purchase or refund process. A future paid distribution must publish separate pricing and refund terms before sale.
 
-## Original files and YOLO Mode
+## Original files
 
-Original PDFs remain unchanged by default. YOLO Mode intentionally modifies an original PDF after explicit confirmation. Even with backups and validation, direct writes can conflict with sync tools or external editors. Keep independent backups and file history.
+Original PDFs remain unchanged. Export always creates a separate annotated copy. Keep independent backups and file history for your vault.
 
 ## Warranty
 

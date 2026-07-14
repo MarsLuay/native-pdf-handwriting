@@ -15,16 +15,6 @@ export interface SidecarPage {
   height: number;
   rotation: 0 | 90 | 180 | 270;
   strokes: InkStroke[];
-  /** Reserved edit operations keep segment erasure additive and migration-free. */
-  erasures?: SegmentErasure[];
-}
-
-export interface SegmentErasure {
-  id: string;
-  strokeId: string;
-  fromPoint: number;
-  toPoint: number;
-  createdAt: string;
 }
 
 export interface SidecarSchemaV1 {
@@ -67,10 +57,21 @@ export function validateSidecar(value: unknown): value is SidecarSchemaV1 {
   return value.pages.every((page) => isRecord(page) && Number.isInteger(page.page) &&
     isFiniteNumber(page.width) && page.width > 0 && isFiniteNumber(page.height) && page.height > 0 &&
     (page.rotation === 0 || page.rotation === 90 || page.rotation === 180 || page.rotation === 270) &&
-    Array.isArray(page.strokes) && page.strokes.every(isStroke) &&
-    (page.erasures === undefined || (Array.isArray(page.erasures) && page.erasures.every((erasure) =>
-      isRecord(erasure) && typeof erasure.id === "string" && typeof erasure.strokeId === "string" &&
-      Number.isInteger(erasure.fromPoint) && Number.isInteger(erasure.toPoint) && typeof erasure.createdAt === "string"))));
+    Array.isArray(page.strokes) && page.strokes.every(isStroke));
+}
+
+export function pickNewerSidecar(
+  sidecar: SidecarSchemaV1 | null,
+  recovery: SidecarSchemaV1 | null
+): SidecarSchemaV1 | null {
+  if (!sidecar) return recovery;
+  if (!recovery) return sidecar;
+  return sidecar.updatedAt >= recovery.updatedAt ? sidecar : recovery;
+}
+
+export function countSidecarStrokes(sidecar: SidecarSchemaV1 | null | undefined): number {
+  if (!sidecar) return 0;
+  return sidecar.pages.reduce((sum, page) => sum + page.strokes.length, 0);
 }
 
 export function serializeSidecar(sidecar: SidecarSchemaV1): string {

@@ -2,9 +2,9 @@
 
 - Keep `Inspiration/` read-only.
 - Keep undocumented Obsidian PDF access inside `src/integration/`.
-- Sidecar JSON is canonical unless YOLO Mode is explicitly enabled.
-- Autosave defaults on. YOLO Mode defaults off. Backup defaults on.
+- Sidecar JSON is the canonical editable annotation store. Original PDFs are never modified.
+- Autosave defaults on. Use Export PDF for a separate annotated copy.
 - Mouse, touch, and trackpad keep normal PDF behavior unless editing is explicit.
 - Use shared toolbar, tools, storage, and engine for direct and embedded PDF views.
-- No OCR. No whole-framework embedding. No unsafe in-place PDF writes.
+- No OCR. No whole-framework embedding. No in-place PDF writes.
 - Run `npm test` and `npm run build` before done.

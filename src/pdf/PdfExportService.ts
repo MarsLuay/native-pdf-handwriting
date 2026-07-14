@@ -1,10 +1,20 @@
-import { PDFDocument, rgb } from "pdf-lib";
-import type { InkStroke } from "../model";
+import { LineCapStyle, PDFDocument, rgb } from "pdf-lib";
+import { DEFAULT_SETTINGS, type InkStroke, type PdfPoint } from "../model";
+import { graphiteStampCircles, seedFromId } from "../tools/PencilTool";
+import { penSampleWidth, penSegmentWidths } from "../tools/PenTool";
+
+export interface PdfExportPageMetrics {
+  page: number;
+  width: number;
+  height: number;
+}
 
 export interface PdfExportInput {
   sourceBytes: Uint8Array;
   strokes?: readonly InkStroke[];
   getStrokes?: () => readonly InkStroke[];
+  /** Sidecar / session page sizes — may differ from MediaBox PDF points (e.g. CSS px @96dpi). */
+  pageMetrics?: readonly PdfExportPageMetrics[];
   flush?: () => Promise<void>;
 }
 
@@ -17,7 +27,28 @@ function parseColor(value: string): ReturnType<typeof rgb> {
 
 export function annotatedFilename(sourceName: string): string {
   const base = sourceName.replace(/\.pdf$/i, "");
-  return `${base || "document"}-annotated.pdf`;
+  return `${base || "document"}_export.pdf`;
+}
+
+/** Map ink page-space → actual PDF MediaBox points when those spaces differ. */
+export function mapInkPointToPdfPage(
+  point: Pick<PdfPoint, "x" | "y">,
+  inkPage: { width: number; height: number },
+  pdfPage: { width: number; height: number }
+): { x: number; y: number } {
+  const sx = inkPage.width > 0 ? pdfPage.width / inkPage.width : 1;
+  const sy = inkPage.height > 0 ? pdfPage.height / inkPage.height : 1;
+  return { x: point.x * sx, y: point.y * sy };
+}
+
+export function mapInkWidthToPdfPage(
+  width: number,
+  inkPage: { width: number; height: number },
+  pdfPage: { width: number; height: number }
+): number {
+  const sx = inkPage.width > 0 ? pdfPage.width / inkPage.width : 1;
+  const sy = inkPage.height > 0 ? pdfPage.height / inkPage.height : 1;
+  return width * ((sx + sy) / 2);
 }
 
 export class PdfExportService {
@@ -26,18 +57,95 @@ export class PdfExportService {
     const strokes = input.getStrokes?.() ?? input.strokes ?? [];
     const sourceSnapshot = input.sourceBytes.slice();
     const document = await PDFDocument.load(sourceSnapshot);
+    const metricsByPage = new Map(
+      (input.pageMetrics ?? []).map((page) => [page.page, page] as const)
+    );
     for (const stroke of strokes) {
       const page = document.getPages()[stroke.page - 1];
       if (!page) throw new RangeError(`Stroke ${stroke.id} references missing page ${stroke.page}`);
       const color = parseColor(stroke.color);
-      if (stroke.points.length === 1) {
-        const point = stroke.points[0]!;
-        page.drawCircle({ x: point.x, y: point.y, size: stroke.width / 2, color, opacity: stroke.opacity });
+      const pdfSize = page.getSize();
+      const inkPage = metricsByPage.get(stroke.page);
+      const sourceSize = inkPage && inkPage.width > 0 && inkPage.height > 0
+        ? { width: inkPage.width, height: inkPage.height }
+        : pdfSize;
+      // Match on-screen canvas width model; scale into MediaBox points.
+      const mapPoint = (point: Pick<PdfPoint, "x" | "y">) => mapInkPointToPdfPage(point, sourceSize, pdfSize);
+      const strokeWidth = mapInkWidthToPdfPage(stroke.width, sourceSize, pdfSize);
+
+      if (stroke.tool === "pencil") {
+        const pencil = DEFAULT_SETTINGS.toolPreferences.pencil;
+        const stamps = graphiteStampCircles(
+          stroke.points.map((point) => {
+            const mapped = mapPoint(point);
+            return {
+              x: mapped.x,
+              y: mapped.y,
+              pressure: point.pressure,
+              tiltX: point.tiltX,
+              tiltY: point.tiltY
+            };
+          }),
+          {
+            color: stroke.color,
+            width: strokeWidth,
+            opacity: stroke.opacity,
+            textureStrength: pencil.textureStrength,
+            pressureSensitivity: pencil.pressureSensitivity,
+            tiltSensitivity: pencil.tiltSensitivity,
+            thinning: pencil.thinning,
+            seed: seedFromId(stroke.id)
+          }
+        );
+        for (const stamp of stamps) {
+          page.drawCircle({
+            x: stamp.x,
+            y: stamp.y,
+            size: stamp.radius,
+            color,
+            opacity: stamp.opacity
+          });
+        }
+        continue;
       }
-      for (let index = 1; index < stroke.points.length; index += 1) {
-        const start = stroke.points[index - 1]!; const end = stroke.points[index]!;
-        const pressure = Math.max(0.15, (start.pressure + end.pressure) / 2);
-        page.drawLine({ start, end, thickness: stroke.width * pressure, color, opacity: stroke.opacity });
+
+      const pen = DEFAULT_SETTINGS.toolPreferences.pen;
+      const penPrefs = {
+        ...pen,
+        width: strokeWidth,
+        opacity: stroke.opacity,
+        color: stroke.color
+      };
+      if (stroke.points.length === 1) {
+        const point = mapPoint(stroke.points[0]!);
+        page.drawCircle({
+          x: point.x,
+          y: point.y,
+          size: penSampleWidth(penPrefs, stroke.points[0]!) / 2,
+          color,
+          opacity: stroke.opacity
+        });
+        continue;
+      }
+      const mappedPoints = stroke.points.map((point) => {
+        const mapped = mapPoint(point);
+        return { x: mapped.x, y: mapped.y, pressure: point.pressure };
+      });
+      for (const segment of penSegmentWidths(mappedPoints, {
+        color: stroke.color,
+        width: strokeWidth,
+        opacity: stroke.opacity,
+        pressureSensitivity: pen.pressureSensitivity,
+        thinning: pen.thinning
+      })) {
+        page.drawLine({
+          start: { x: segment.start.x, y: segment.start.y },
+          end: { x: segment.end.x, y: segment.end.y },
+          thickness: segment.thickness,
+          color,
+          opacity: stroke.opacity,
+          lineCap: LineCapStyle.Round
+        });
       }
     }
     const exported = await document.save();
@@ -47,58 +155,4 @@ export class PdfExportService {
   }
 
   async validate(bytes: Uint8Array): Promise<void> { await PDFDocument.load(bytes); }
-}
-
-export interface BinaryFileAdapter {
-  read(path: string): Promise<Uint8Array>;
-  write(path: string, bytes: Uint8Array): Promise<void>;
-  copy(from: string, to: string): Promise<void>;
-  replace(from: string, to: string): Promise<void>;
-  remove(path: string): Promise<void>;
-}
-
-export interface DirectWriteOptions {
-  confirmed: boolean;
-  createBackup?: boolean;
-  backupPath?: string;
-  retainSidecar?: boolean;
-  onDiscardSidecar?: () => Promise<void>;
-}
-
-export const DEFAULT_YOLO_OPTIONS = { enabled: false, createBackup: true, retainSidecar: true } as const;
-
-export class DirectPdfWriteTransaction {
-  constructor(private readonly files: BinaryFileAdapter, private readonly validate: (bytes: Uint8Array) => Promise<void>) {}
-
-  async commit(sourcePath: string, output: Uint8Array, options: DirectWriteOptions): Promise<void> {
-    if (!options.confirmed) throw new Error("YOLO Mode direct write requires explicit confirmation");
-    const tempPath = `${sourcePath}.ink-tmp`;
-    const backupPath = options.backupPath ?? `${sourcePath}.ink-backup`;
-    const createBackup = options.createBackup ?? true;
-    const retainSidecar = options.retainSidecar ?? true;
-    let backupCreated = false;
-    let replaced = false;
-    await this.files.write(tempPath, output);
-    try {
-      await this.validate(await this.files.read(tempPath));
-      if (createBackup) { await this.files.copy(sourcePath, backupPath); backupCreated = true; }
-      try { await this.files.replace(tempPath, sourcePath); }
-      catch (error) {
-        if (backupCreated) await this.files.copy(backupPath, sourcePath);
-        throw error;
-      }
-      replaced = true;
-      try { await this.validate(await this.files.read(sourcePath)); }
-      catch (error) {
-        if (backupCreated) await this.files.copy(backupPath, sourcePath);
-        throw error;
-      }
-      if (!retainSidecar) await options.onDiscardSidecar?.();
-    } catch (error) {
-      if (!replaced) {
-        try { await this.files.remove(tempPath); } catch { /* recovery cleanup is best effort */ }
-      }
-      throw error;
-    }
-  }
 }

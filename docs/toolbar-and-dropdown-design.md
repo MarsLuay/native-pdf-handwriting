@@ -4,8 +4,10 @@
 
 ## Compact controls
 
+- Draw is an explicit checkbox and starts off for each PDF session. Off preserves native mouse-like PDF interaction; on enables the selected drawing, eraser, or lasso tool.
+- Annotation actions use compact icon buttons that match Obsidian's native PDF controls. Save status sits in a separate fixed-width area, so status text never shifts the tools.
 - Drawing main button shows Pen/Pencil; its dropdown contains both tools, five numeric widths with live previews, and advanced pressure/stabilization/opacity/thinning/texture/tilt/mouse controls.
-- Eraser exposes whole-stroke sizes. Segment erasing is visible but disabled until supported.
+- Eraser exposes Small, Medium, and Large circular sizes with matching previews. It removes only ink inside the swept circle.
 - Color exposes recent colors and the active swatch.
 - Lasso exposes freeform, ellipse, rectangle, enclosed, and intersecting modes.
 - Undo/redo always occupy predictable positions when supported.

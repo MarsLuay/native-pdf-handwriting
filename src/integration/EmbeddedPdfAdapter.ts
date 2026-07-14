@@ -18,6 +18,6 @@ export class EmbeddedPdfAdapter extends BasePdfAdapter {
   static attach(host: HTMLElement, callbacks: PdfAdapterCallbacks = {}): EmbeddedPdfAdapter {
     const compatibility = PdfViewerCompatibility.embedded(host);
     if (!compatibility.compatible) throw new PdfAdapterCompatibilityError("embedded", compatibility.errors);
-    return new EmbeddedPdfAdapter(compatibility, callbacks);
+    return new EmbeddedPdfAdapter(compatibility, host, callbacks);
   }
 }

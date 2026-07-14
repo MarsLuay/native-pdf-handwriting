@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { InkStroke } from "../src/model";
 import { InkSession } from "../src/ink/InkSession";
-import { AddStrokeCommand, DeleteStrokesCommand, ReplaceStrokesCommand, translateStrokes } from "../src/history/AnnotationCommands";
+import { AddStrokeCommand, DeleteStrokesCommand, ReplacePageStrokesCommand, ReplaceStrokesCommand, translateStrokes } from "../src/history/AnnotationCommands";
 import { CommandHistory } from "../src/history/CommandHistory";
 
 const stroke: InkStroke = { id: "s", page: 1, tool: "pen", color: "#000000", width: 2, opacity: 1, inputType: "pen", points: [{ x: 1, y: 2, pressure: 1, time: 0 }], createdAt: "now", updatedAt: "now" };
@@ -20,5 +20,21 @@ describe("annotation command history", () => {
     history.execute(new DeleteStrokesCommand(session, [stroke]));
     expect(session.all()).toHaveLength(0); history.undo(); expect(session.all()).toHaveLength(1);
     expect(changed).toHaveBeenCalledTimes(7);
+  });
+
+  it("replaces one erased stroke with any number of surviving segments", () => {
+    const session = new InkSession([stroke]);
+    const history = new CommandHistory(() => undefined);
+    const left = { ...stroke, id: "left", points: [{ ...stroke.points[0]!, x: 0 }] };
+    const right = { ...stroke, id: "right", points: [{ ...stroke.points[0]!, x: 4 }] };
+
+    history.execute(new ReplacePageStrokesCommand(session, 1, [stroke], [left, right]));
+    expect(session.all().map((item) => item.id)).toEqual(["left", "right"]);
+
+    history.undo();
+    expect(session.all().map((item) => item.id)).toEqual(["s"]);
+
+    history.redo();
+    expect(session.all().map((item) => item.id)).toEqual(["left", "right"]);
   });
 });

@@ -49,6 +49,41 @@ describe("autosave", () => {
     queue.schedule("a", "A"); queue.schedule("b", "B"); await queue.close();
     expect(write).toHaveBeenCalledTimes(2); expect(() => queue.schedule("a", "new")).toThrow("closed");
   });
+
+  it("abandon cancels timers and never flushes", async () => {
+    vi.useFakeTimers();
+    const write = vi.fn(async () => undefined);
+    const queue = new AutosaveQueue<string>({ write, delayMs: 100 });
+    queue.schedule("doc", "stale");
+    queue.abandon();
+    await vi.advanceTimersByTimeAsync(200);
+    await queue.flush("doc");
+    await queue.close();
+    expect(write).not.toHaveBeenCalled();
+    expect(queue.isDirty("doc")).toBe(false);
+    vi.useRealTimers();
+  });
+
+  it("abandon drops an in-flight follow-up drain", async () => {
+    let release: (() => void) | undefined;
+    const written: string[] = [];
+    const queue = new AutosaveQueue<string>({
+      delayMs: 1000,
+      write: async (_id, value) => {
+        written.push(value);
+        if (value === "one") await new Promise<void>((resolve) => { release = resolve; });
+      }
+    });
+    queue.schedule("doc", "one");
+    const first = queue.flush("doc");
+    await Promise.resolve();
+    queue.schedule("doc", "two");
+    queue.abandon();
+    release?.();
+    await first;
+    await queue.flush("doc");
+    expect(written).toEqual(["one"]);
+  });
 });
 
 describe("manual saving and close decisions", () => {

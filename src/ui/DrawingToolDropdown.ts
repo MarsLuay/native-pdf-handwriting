@@ -1,8 +1,8 @@
 import { DEFAULT_SETTINGS, type DrawingTool, type ToolPreferences } from "../model";
 import type { DropdownOption } from "./DropdownController";
 
-export const DRAWING_WIDTHS = [0.8, 1.5, 2.5, 4.5, 7] as const;
-const WIDTH_LABELS = ["Extra Fine", "Fine", "Medium", "Thick", "Extra Thick"] as const;
+export const DRAWING_WIDTHS = [0.35, 0.5, 0.8, 1.5, 2.5, 4.5, 7] as const;
+const WIDTH_LABELS = ["Hairline", "Ultra Fine", "Extra Fine", "Fine", "Medium", "Thick", "Extra Thick"] as const;
 
 export function drawingOptions(
   preferences: ToolPreferences,

@@ -3,7 +3,7 @@
   "name": "Native PDF Ink",
   "version": "0.1.0",
   "minAppVersion": "1.5.0",
-  "description": "Handwrite and annotate PDFs inside Obsidian while keeping originals unchanged by default.",
+  "description": "Locally handwrite on PDFs with a stylus or mouse inside Obsidian.",
   "author": "Mars",
   "isDesktopOnly": false
 }

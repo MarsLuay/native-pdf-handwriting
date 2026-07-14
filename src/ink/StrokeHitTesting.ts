@@ -25,9 +25,3 @@ export function strokeBounds(stroke: InkStroke): Bounds {
   const ys = stroke.points.map((point) => point.y);
   return { minX: Math.min(...xs) - half, minY: Math.min(...ys) - half, maxX: Math.max(...xs) + half, maxY: Math.max(...ys) + half };
 }
-
-export function segmentsIntersect(a: Pick<PdfPoint, "x" | "y">, b: Pick<PdfPoint, "x" | "y">, c: Pick<PdfPoint, "x" | "y">, d: Pick<PdfPoint, "x" | "y">): boolean {
-  const cross = (p: typeof a, q: typeof a, r: typeof a) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
-  const values = [cross(a, b, c), cross(a, b, d), cross(c, d, a), cross(c, d, b)];
-  return values[0]! * values[1]! <= 0 && values[2]! * values[3]! <= 0;
-}

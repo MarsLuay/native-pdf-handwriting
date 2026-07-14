@@ -3,7 +3,7 @@ import type { InkStroke } from "../src/model";
 import { createDocumentIdentity } from "../src/storage/DocumentIdentity";
 import { MigrationManager } from "../src/storage/MigrationManager";
 import { SidecarRepository, type TextFileAdapter } from "../src/storage/SidecarRepository";
-import { parseSidecar, serializeSidecar, type SidecarSchemaV1 } from "../src/storage/SidecarSchema";
+import { parseSidecar, pickNewerSidecar, serializeSidecar, type SidecarSchemaV1 } from "../src/storage/SidecarSchema";
 
 const stroke: InkStroke = { id: "s1", page: 1, tool: "pen", color: "#000000", width: 2, opacity: 1, inputType: "pen", points: [{ x: 1, y: 2, pressure: 0.5, time: 3 }], createdAt: "2026-01-01", updatedAt: "2026-01-01" };
 const sidecar = (): SidecarSchemaV1 => ({ schemaVersion: 1, document: { id: "doc", vaultPath: "a.pdf" }, pages: [{ page: 1, width: 100, height: 200, rotation: 0, strokes: [stroke] }], createdAt: "2026-01-01", updatedAt: "2026-01-01" });
@@ -24,17 +24,26 @@ describe("sidecar storage", () => {
     expect(() => parseSidecar("{}")) .toThrow("invalid sidecar");
   });
 
-  it("migrates v0 while reserving additive segment erasures", () => {
+  it("migrates v0 pages to schema v1 with default rotation", () => {
     const migrated = new MigrationManager().migrate({ version: 0, pdf: { id: "doc", path: "a.pdf" }, pages: [{ page: 1, width: 100, height: 200, strokes: [stroke] }] }, "now");
     expect(migrated.schemaVersion).toBe(1);
     expect(migrated.pages[0]?.rotation).toBe(0);
-    migrated.pages[0]!.erasures = [{ id: "e", strokeId: "s1", fromPoint: 0, toPoint: 1, createdAt: "now" }];
-    expect(parseSidecar(serializeSidecar(migrated)).pages[0]?.erasures).toHaveLength(1);
+    expect(migrated.pages[0]?.strokes).toEqual([stroke]);
   });
 
   it("uses fingerprint/content hash identity across renames and path fallback otherwise", () => {
     expect(createDocumentIdentity({ vaultPath: "old.pdf", fingerprint: "fp" }).id).toBe(createDocumentIdentity({ vaultPath: "new.pdf", fingerprint: "fp" }).id);
     expect(createDocumentIdentity({ vaultPath: "old.pdf" }).id).not.toBe(createDocumentIdentity({ vaultPath: "new.pdf" }).id);
+  });
+
+  it("prefers the newer sidecar or recovery snapshot when both exist", () => {
+    const older = sidecar();
+    const newer = sidecar();
+    newer.updatedAt = "2026-02-01";
+    expect(pickNewerSidecar(older, newer)).toBe(newer);
+    expect(pickNewerSidecar(newer, older)).toBe(newer);
+    expect(pickNewerSidecar(older, null)).toBe(older);
+    expect(pickNewerSidecar(null, newer)).toBe(newer);
   });
 
   it("atomically renames valid temporary data and preserves the last valid file on failure", async () => {

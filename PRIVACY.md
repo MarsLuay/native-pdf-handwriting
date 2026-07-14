@@ -10,7 +10,7 @@ Native PDF Ink and its developer collect no information from your device. The pl
 
 ## How we use your information
 
-Local information is used only to render annotations, save editable sidecars, recover interrupted edits, export annotated copies, and perform explicitly confirmed YOLO Mode writes. It is not used for profiling, advertising, analytics, or training.
+Local information is used only to render annotations, save editable sidecars, recover interrupted edits, and export annotated copies. It is not used for profiling, advertising, analytics, or training.
 
 ## Data stored on your device
 
@@ -19,14 +19,13 @@ The plugin may store:
 - editable annotation sidecars;
 - autosave and crash-recovery files;
 - plugin settings and tool preferences;
-- optional PDF backups created before YOLO Mode writes;
 - annotated PDF copies you explicitly export.
 
-Default sidecars and recovery data live under `.obsidian/plugins/obsidian-native-pdf-ink/`. Backup and sidecar locations are configurable. Exported PDFs use the location you choose or the source PDF folder.
+Default sidecars and recovery data live under `.obsidian/plugins/obsidian-native-pdf-ink/`. Sidecar locations are configurable. Exported PDFs use the location you choose or the source PDF folder.
 
 ## Original PDFs
 
-Original PDFs remain unchanged by default. `Export PDF` creates a separate file. YOLO Mode can modify an original PDF only after explicit confirmation; backup creation defaults on.
+Original PDFs remain unchanged. `Export PDF` creates a separate annotated file.
 
 ## Retention and deletion
 

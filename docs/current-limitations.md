@@ -3,11 +3,12 @@
 First pass proves architecture and direct-view annotation path. Runtime compatibility still needs testing against current Obsidian desktop, Android, and iPad builds.
 
 - Undocumented PDF viewer selectors may change; adapter fails closed and reports compatibility details.
-- Segment eraser is reserved but not enabled.
+- Circular erasing preserves untouched stroke segments; very dense pages still need device profiling.
 - Native editable PDF `/Ink` annotations are not emitted; export draws vector page content.
-- Pencil texture is lightweight, not a physical graphite simulation.
+- Pencil uses graphite grit with broken ribbon + fine elliptical tooth (Texture slider). Screen-capped stamp size so thick tips stay porous, not mega-blobs. Not a physical deposition sim.
 - Lasso resize and clipboard behavior are initial implementations and need large-document profiling.
 - OCR and handwriting recognition are intentionally absent.
-- YOLO Mode architecture exists for validated atomic writes; keep disabled until platform-specific vault replacement behavior passes manual tests.
+- MacBook Force Touch trackpad pressure is not available in Obsidian (Electron); stylus pressure works when the OS exposes it.
+- Source PDFs are never modified; annotated copies are export-only.
 
-Next phase: test inside Obsidian, record real private object graph by platform/version, fix compatibility adapter only, profile large PDFs, then complete embedded focus-view parity.
+Next phase: test inside Obsidian, record real private object graph by platform/version, fix compatibility adapter only, profile large PDFs.

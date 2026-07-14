@@ -5,12 +5,12 @@ Native PDF Ink adds one annotation system to Obsidian's direct and embedded PDF 
 ## Boundaries
 
 - `integration/`: only owner of undocumented Obsidian PDF objects, DOM selectors, PDF.js compatibility probes, viewer discovery, page location, and reversible patches.
-- `focus-view/`: expanded embedded-PDF lifecycle. It receives a stable viewer adapter, never private PDF classes.
+- `focus-view/`: embed Annotate chrome and helpers that open a PDF leaf (not a private-class viewer).
 - `input/`: Pointer Events policy. It decides before capture or `preventDefault()`.
 - `ink/`: strokes, filtering, rendering, simplification, hit testing. Coordinates use PDF page space.
 - `tools/`: tool state and behavior. Preferences stay outside annotation documents.
 - `storage/`: versioned sidecars, identity, serialized autosave, manual save, recovery, atomic writes.
-- `pdf/`: coordinate mapping, outline/search interfaces, annotated-copy export, validated direct-write transaction.
+- `pdf/`: coordinate mapping and annotated-copy export.
 - `history/`: commands used by edits, undo, redo, autosave scheduling.
 - `ui/`: one accessible toolbar and dropdown system used by both viewing routes.
 
@@ -18,11 +18,11 @@ Private viewer changes should require edits only in `integration/`. Engine tests
 
 ## Canonical data
 
-Sidecar JSON is canonical editable annotation data. Screen coordinates are transient. Original PDF stays unchanged by default. `Export PDF` creates a separate annotated copy. YOLO Mode is optional, confirmed, transactional, backed up by default, and never performs in-place byte writes.
+Sidecar JSON is canonical editable annotation data. Screen coordinates are transient. Original PDF stays unchanged. `Export PDF` creates a separate annotated copy; there is no in-place source-PDF write path.
 
 ## Lifecycle
 
-Each attached viewer owns one disposable session. Closing PDF, removing embed, switching note, closing focus mode, or unloading plugin performs this order:
+Each attached viewer owns one disposable session. Closing PDF, removing embed, switching note, or unloading plugin performs this order:
 
 1. stop accepting new edits;
 2. release pointer capture;
@@ -34,7 +34,7 @@ Each attached viewer owns one disposable session. Closing PDF, removing embed, s
 
 ## First use
 
-Open PDF, select Pen, write. Stylus may enter annotation mode automatically; mouse/touch keep normal PDF controls until editing is selected. Status reads `Saved`, `Saving…`, `Unsaved changes`, or `Save failed`. Expert compatibility data stays in debug command, not main toolbar.
+Open PDF, enable Draw, select Pen or Pencil, write. Mouse/touch keep normal PDF controls until Draw is on. Status reads `Saved`, `Saving…`, `Unsaved changes`, or `Save failed`.
 
 ## Offline behavior
 

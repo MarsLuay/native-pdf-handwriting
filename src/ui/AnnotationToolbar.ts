@@ -2,26 +2,46 @@ import type { DrawingTool, SaveStatus, ToolId, ToolPreferences } from "../model"
 import { colorOptions } from "./ColorPicker";
 import { DropdownController, type DropdownOpenOptions, type DropdownOption } from "./DropdownController";
 import { drawingAdvanced, drawingOptions } from "./DrawingToolDropdown";
-import { eraserOptions } from "./EraserDropdown";
+import { eraserMenu } from "./EraserDropdown";
 import { lassoOptions } from "./LassoDropdown";
 import { SaveStatusIndicator } from "./SaveStatusIndicator";
+import { setToolbarColorSwatch, setToolbarIcon, type ToolbarIcon } from "./ToolbarIcon";
 
-export type ZoomAction = "out" | "in" | "fit-width" | "fit-page" | "actual" | "reset";
-export type MoreAction = "export" | "visibility" | "settings" | "autosave" | "debug" | "compatibility";
+export type ZoomAction =
+  | "out"
+  | "in"
+  | "fit-width"
+  | "fit-page"
+  | "actual"
+  | "reset"
+  | "200"
+  | "400"
+  | "800"
+  | "1000"
+  | "1500"
+  | "2000";
+export type MoreAction =
+  | "export"
+  | "toolbar-main"
+  | "toolbar-left"
+  | "toolbar-right";
 
 export interface AnnotationToolbarCallbacks {
   onPreferencesChange(preferences: ToolPreferences): void;
+  onEraserSizePreview?(size: number): void;
+  onDrawModeChange?(enabled: boolean): void;
   onUndo?(): void;
   onRedo?(): void;
   onSave?(): void | Promise<void>;
   onZoom?(action: ZoomAction): void;
-  onOutline?(): void;
   onMore?(action: MoreAction): void;
+  toolbarPlacement?(): "main" | "left" | "right";
 }
 
 export interface AnnotationToolbarOptions {
   preferences: ToolPreferences;
   autosave: boolean;
+  drawEnabled?: boolean;
   callbacks: AnnotationToolbarCallbacks;
   supportedMoreActions?: MoreAction[];
   document?: Document;
@@ -36,6 +56,7 @@ export class AnnotationToolbar {
   private readonly preferences: ToolPreferences;
   private readonly abort = new AbortController();
   private readonly buttons = new Map<string, HTMLButtonElement>();
+  private readonly controls: HTMLElement;
   private lastDrawingTool: DrawingTool;
   private autosave: boolean;
 
@@ -52,19 +73,21 @@ export class AnnotationToolbar {
     this.element.dataset.focusOverlayInternal = "true";
     this.element.setAttribute("role", "toolbar");
     this.element.setAttribute("aria-label", "PDF annotation tools");
+    this.controls = this.document.createElement("div");
+    this.controls.className = "native-pdf-ink-toolbar-controls";
 
-    this.element.append(this.groupedTool("drawing", () => this.drawingMenu()));
-    this.element.append(this.groupedTool("eraser", () => ({ label: "Eraser options", options: this.eraserMenu() })));
-    this.element.append(this.colorButton());
-    this.element.append(this.groupedTool("lasso", () => ({ label: "Lasso options", options: this.lassoMenu() })));
-    this.element.append(this.actionButton("undo", "Undo", () => this.callbacks.onUndo?.(), !this.callbacks.onUndo));
-    this.element.append(this.actionButton("redo", "Redo", () => this.callbacks.onRedo?.(), !this.callbacks.onRedo));
-    if (this.callbacks.onZoom) this.element.append(this.menuButton("zoom", "Zoom", this.zoomMenu()));
-    if (this.callbacks.onOutline) this.element.append(this.actionButton("outline", "Outline", () => this.callbacks.onOutline?.()));
+    this.controls.append(this.drawToggle(options.drawEnabled ?? false));
+    this.controls.append(this.groupedTool("drawing", () => this.drawingMenu()));
+    this.controls.append(this.groupedTool("eraser", () => this.eraserMenuOptions()));
+    this.controls.append(this.colorButton());
+    this.controls.append(this.groupedTool("lasso", () => ({ label: "Lasso options", options: this.lassoMenu() })));
+    this.controls.append(this.actionButton("undo", "Undo", () => this.callbacks.onUndo?.(), !this.callbacks.onUndo));
+    this.controls.append(this.actionButton("redo", "Redo", () => this.callbacks.onRedo?.(), !this.callbacks.onRedo));
+    if (this.callbacks.onZoom) this.controls.append(this.menuButton("zoom", "Zoom", this.zoomMenu()));
     const supportedMore = options.supportedMoreActions ?? [];
-    if (this.callbacks.onMore && supportedMore.length > 0) this.element.append(this.menuButton("more", "More", this.moreMenu(supportedMore)));
-    this.element.append(this.saveStatus.element);
-    if (!this.autosave && this.callbacks.onSave) this.element.append(this.actionButton("save", "Save", () => void this.callbacks.onSave?.()));
+    if (this.callbacks.onMore && supportedMore.length > 0) this.controls.append(this.menuButton("more", "More", this.moreMenu(supportedMore)));
+    if (!this.autosave && this.callbacks.onSave) this.controls.append(this.actionButton("save", "Save", () => void this.callbacks.onSave?.()));
+    this.element.append(this.controls, this.saveStatus.element);
     this.updateButtons();
   }
 
@@ -75,7 +98,7 @@ export class AnnotationToolbar {
       existing?.remove();
       this.buttons.delete("save");
     } else if (!existing && this.callbacks.onSave) {
-      this.element.append(this.actionButton("save", "Save", () => void this.callbacks.onSave?.()));
+      this.controls.append(this.actionButton("save", "Save", () => void this.callbacks.onSave?.()));
     }
   }
 
@@ -89,9 +112,7 @@ export class AnnotationToolbar {
     this.element.remove();
   }
 
-  private groupedTool(id: "drawing" | "eraser" | "lasso", menu: () => DropdownOpenOptions): HTMLElement {
-    const group = this.document.createElement("div");
-    group.className = "native-pdf-ink-tool-group";
+  private groupedTool(id: "drawing" | "eraser" | "lasso", menu: () => DropdownOpenOptions): HTMLButtonElement {
     const main = this.actionButton(id, id, () => {
       const active = id === "drawing"
         ? this.preferences.activeTool === "pen" || this.preferences.activeTool === "pencil"
@@ -101,23 +122,55 @@ export class AnnotationToolbar {
     });
     main.setAttribute("aria-haspopup", "menu");
     main.setAttribute("aria-expanded", "false");
-    const arrow = this.actionButton(`${id}-menu`, "▾", () => this.dropdown.toggle(id, main, menu()));
-    arrow.classList.add("native-pdf-ink-menu-arrow");
-    arrow.setAttribute("aria-label", `${id} options`);
-    group.append(main, arrow);
-    return group;
+    return main;
   }
 
   private actionButton(id: string, label: string, action: () => void, disabled = false): HTMLButtonElement {
     const button = this.document.createElement("button");
     button.type = "button";
-    button.className = "native-pdf-ink-toolbar-button";
+    button.className = "native-pdf-ink-toolbar-button clickable-icon";
     button.dataset.control = id;
-    button.textContent = label;
+    this.presentButton(button, label, this.iconFor(id));
     button.disabled = disabled;
     button.addEventListener("click", action, { signal: this.abort.signal });
     this.buttons.set(id, button);
     return button;
+  }
+
+  private drawToggle(enabled: boolean): HTMLLabelElement {
+    const label = this.document.createElement("label");
+    label.className = "native-pdf-ink-draw-toggle";
+    label.setAttribute("aria-label", "Turn on to draw, erase, or select annotations. Leave off for normal PDF controls.");
+    label.removeAttribute("title");
+    const input = this.document.createElement("input");
+    input.type = "checkbox";
+    input.checked = enabled;
+    input.dataset.control = "draw";
+    input.addEventListener("change", () => {
+      label.dataset.enabled = String(input.checked);
+      this.callbacks.onDrawModeChange?.(input.checked);
+    }, { signal: this.abort.signal });
+    label.dataset.enabled = String(enabled);
+    const text = this.document.createElement("span");
+    text.className = "native-pdf-ink-draw-toggle-label";
+    text.textContent = "Draw";
+    label.append(input, text);
+    return label;
+  }
+
+  private presentButton(button: HTMLButtonElement, label: string, icon: ToolbarIcon): void {
+    button.setAttribute("aria-label", label);
+    // No native title — Obsidian already tooltips clickable-icon from aria-label (double bubble otherwise).
+    button.removeAttribute("title");
+    setToolbarIcon(button, icon);
+  }
+
+  private iconFor(id: string): ToolbarIcon {
+    if (id === "drawing") return this.lastDrawingTool;
+    if (id === "eraser" || id === "lasso" || id === "undo" || id === "redo" || id === "zoom" || id === "more" || id === "save") {
+      return id as ToolbarIcon;
+    }
+    return "more";
   }
 
   private menuButton(id: string, label: string, options: DropdownOption[]): HTMLButtonElement {
@@ -142,13 +195,22 @@ export class AnnotationToolbar {
     return { label: "Drawing options", content };
   }
 
-  private eraserMenu(): DropdownOption[] {
-    return eraserOptions(this.preferences, (type, size) => {
-      this.preferences.activeTool = "eraser";
-      this.preferences.eraser.type = type;
-      if (size !== undefined) this.preferences.eraser.size = size;
-      this.changed();
-    });
+  private eraserMenuOptions(): DropdownOpenOptions {
+    return {
+      label: "Eraser options",
+      content: eraserMenu(this.document, this.preferences, {
+        onPreview: (size) => {
+          this.preferences.activeTool = "eraser";
+          this.preferences.eraser.size = size;
+          this.callbacks.onEraserSizePreview?.(size);
+        },
+        onCommit: (size) => {
+          this.preferences.activeTool = "eraser";
+          this.preferences.eraser.size = size;
+          this.changed();
+        }
+      }, this.abort.signal)
+    };
   }
 
   private lassoMenu(): DropdownOption[] {
@@ -156,17 +218,18 @@ export class AnnotationToolbar {
       this.preferences.activeTool = "lasso";
       this.preferences.lasso.type = type;
       this.changed();
-    }, (mode) => {
-      this.preferences.activeTool = "lasso";
-      this.preferences.lasso.selectionMode = mode;
-      this.changed();
     });
   }
 
   private colorButton(): HTMLButtonElement {
-    const button = this.actionButton("color", "Color", () => this.dropdown.toggle("color", button, { label: "Color options", content: this.colorMenu() }));
+    const button = this.document.createElement("button");
+    button.type = "button";
+    button.className = "native-pdf-ink-toolbar-button clickable-icon";
+    button.dataset.control = "color";
     button.setAttribute("aria-haspopup", "menu");
     button.setAttribute("aria-expanded", "false");
+    button.addEventListener("click", () => this.dropdown.toggle("color", button, { label: "Color options", content: this.colorMenu() }), { signal: this.abort.signal });
+    this.buttons.set("color", button);
     return button;
   }
 
@@ -206,18 +269,35 @@ export class AnnotationToolbar {
 
   private zoomMenu(): DropdownOption[] {
     const labels: Array<[ZoomAction, string]> = [
-      ["out", "Zoom out"], ["in", "Zoom in"], ["fit-width", "Fit width"],
-      ["fit-page", "Fit page"], ["actual", "Actual size"], ["reset", "Reset zoom"]
+      ["out", "Zoom out"],
+      ["in", "Zoom in"],
+      ["fit-width", "Fit width"],
+      ["fit-page", "Fit page"],
+      ["actual", "Actual size (100%)"],
+      ["200", "200%"],
+      ["400", "400%"],
+      ["800", "800%"],
+      ["1000", "1000%"],
+      ["1500", "1500%"],
+      ["2000", "2000%"],
+      ["reset", "Reset zoom"]
     ];
     return labels.map(([id, label]) => ({ id, label, onSelect: () => this.callbacks.onZoom?.(id) }));
   }
 
   private moreMenu(supported: MoreAction[]): DropdownOption[] {
     const labels: Record<MoreAction, string> = {
-      export: "Export PDF", visibility: "Toggle annotation visibility", settings: "Annotation settings",
-      autosave: "Autosave settings", debug: "Debug information", compatibility: "Compatibility information"
+      export: "Export PDF",
+      "toolbar-main": "Toolbar: PDF bar",
+      "toolbar-left": "Toolbar: Left sidebar",
+      "toolbar-right": "Toolbar: Right sidebar"
     };
-    return supported.map((id) => ({ id, label: labels[id], onSelect: () => this.callbacks.onMore?.(id) }));
+    return supported.map((id) => ({
+      id,
+      label: labels[id],
+      active: id === `toolbar-${this.callbacks.toolbarPlacement?.() ?? "main"}`,
+      onSelect: () => this.callbacks.onMore?.(id)
+    }));
   }
 
   private inlineOption(option: DropdownOption): HTMLButtonElement {
@@ -250,17 +330,18 @@ export class AnnotationToolbar {
 
   private updateButtons(): void {
     const active = this.preferences.activeTool;
-    this.buttons.get("drawing")!.textContent = this.lastDrawingTool === "pen" ? "Pen" : "Pencil";
-    this.buttons.get("eraser")!.textContent = "Eraser";
-    this.buttons.get("lasso")!.textContent = this.preferences.lasso.type === "freeform" ? "Lasso" : this.preferences.lasso.type === "ellipse" ? "Ellipse" : "Rectangle";
+    this.presentButton(this.buttons.get("drawing")!, this.lastDrawingTool === "pen" ? "Pen" : "Pencil", this.lastDrawingTool);
+    this.presentButton(this.buttons.get("eraser")!, "Eraser", "eraser");
+    this.presentButton(this.buttons.get("lasso")!, this.preferences.lasso.type === "freeform" ? "Lasso" : "Rectangle", "lasso");
     this.buttons.get("drawing")!.setAttribute("aria-pressed", String(active === "pen" || active === "pencil"));
     this.buttons.get("eraser")!.setAttribute("aria-pressed", String(active === "eraser"));
     this.buttons.get("lasso")!.setAttribute("aria-pressed", String(active === "lasso"));
     const drawing = this.preferences[active === "pencil" ? "pencil" : "pen"];
     const color = this.buttons.get("color");
     if (color) {
-      color.style.setProperty("--ink-current-color", drawing.color);
       color.setAttribute("aria-label", `Color ${drawing.color}`);
+      color.removeAttribute("title");
+      setToolbarColorSwatch(color, drawing.color);
     }
   }
 }
