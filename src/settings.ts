@@ -107,7 +107,7 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName("Developer").setHeading();
     new Setting(containerEl)
       .setName("Vault debug log")
-      .setDesc("Append every plugin event to a line-delimited log file in the vault so agents can read it directly. Off by default.")
+      .setDesc("Append every plugin event to a line-delimited log file in the vault so agents can read it directly. Off by default. Includes left-toolbar PDF sidebar offset diagnostics (reason, rects, jumps).")
       .addToggle((toggle) =>
         toggle.setValue(this.host.settings.vaultDebugLog).onChange(async (value) => {
           await this.persistPatch({ vaultDebugLog: value });

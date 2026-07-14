@@ -94,6 +94,10 @@ describe("AnnotationToolbar", () => {
     expect(drawing?.classList.contains("clickable-icon")).toBe(true);
     expect(drawing?.querySelector("svg")).not.toBeNull();
     expect(changed).toHaveBeenCalled();
+    toolbar.element.querySelector<HTMLButtonElement>("[data-control='drawing']")?.click();
+    document.querySelector<HTMLButtonElement>("[data-option-id='highlighter']")?.click();
+    expect(preferences.activeTool).toBe("highlighter");
+    expect(drawing?.getAttribute("aria-label")).toBe("Highlighter");
     toolbar.setAutosave(true);
     expect(toolbar.element.querySelector("[data-control='save']")).toBeNull();
     toolbar.setSaveStatus("failed");
@@ -103,6 +107,67 @@ describe("AnnotationToolbar", () => {
     expect(toolbar.saveStatus.element.querySelector(".native-pdf-handwriting-save-status-dot")).not.toBeNull();
     expect(toolbar.saveStatus.element.parentElement).toBe(toolbar.element);
     expect(toolbar.saveStatus.element.previousElementSibling?.classList.contains("native-pdf-handwriting-toolbar-controls")).toBe(true);
+    toolbar.destroy();
+  });
+
+  it("orders draw, color, pen, eraser, then laser on the toolbar", () => {
+    const toolbar = new AnnotationToolbar({
+      preferences: structuredClone(DEFAULT_SETTINGS.toolPreferences),
+      autosave: true,
+      callbacks: { onPreferencesChange: vi.fn() },
+      ownerDocument: document
+    });
+    document.body.append(toolbar.element);
+    const controls = [...toolbar.element.querySelectorAll<HTMLElement>("[data-control]")];
+    const ids = controls.map((el) => el.dataset.control);
+    expect(ids.indexOf("draw")).toBeLessThan(ids.indexOf("color"));
+    expect(ids.indexOf("color")).toBeLessThan(ids.indexOf("drawing"));
+    expect(ids.indexOf("drawing")).toBeLessThan(ids.indexOf("eraser"));
+    expect(ids.indexOf("eraser")).toBeLessThan(ids.indexOf("laser"));
+    toolbar.destroy();
+  });
+
+  it("activates the laser pointer from the toolbar", () => {
+    const preferences = structuredClone(DEFAULT_SETTINGS.toolPreferences);
+    const changed = vi.fn();
+    const toolbar = new AnnotationToolbar({
+      preferences,
+      autosave: true,
+      callbacks: { onPreferencesChange: changed },
+      ownerDocument: document
+    });
+    document.body.append(toolbar.element);
+    const laser = toolbar.element.querySelector<HTMLButtonElement>("[data-control='laser']");
+    expect(laser).not.toBeNull();
+    laser?.click();
+    expect(preferences.activeTool).toBe("laser");
+    expect(laser?.getAttribute("aria-pressed")).toBe("true");
+    expect(changed).toHaveBeenCalled();
+    laser?.click();
+    expect(document.querySelector(".native-pdf-handwriting-laser-note")?.textContent).toContain("never saved");
+    toolbar.destroy();
+  });
+
+  it("moves the laser width checkmark when another option is selected", () => {
+    const preferences = structuredClone(DEFAULT_SETTINGS.toolPreferences);
+    preferences.activeTool = "laser";
+    preferences.laser.width = 2;
+    const toolbar = new AnnotationToolbar({
+      preferences,
+      autosave: true,
+      callbacks: { onPreferencesChange: vi.fn() },
+      ownerDocument: document
+    });
+    document.body.append(toolbar.element);
+    toolbar.element.querySelector<HTMLButtonElement>("[data-control='laser']")?.click();
+    const fine = document.querySelector<HTMLButtonElement>("[data-option-id='laser-width-1']");
+    const standard = document.querySelector<HTMLButtonElement>("[data-option-id='laser-width-2']");
+    expect(standard?.getAttribute("aria-checked")).toBe("true");
+    expect(fine?.getAttribute("aria-checked")).toBe("false");
+    fine?.click();
+    expect(preferences.laser.width).toBe(1);
+    expect(fine?.getAttribute("aria-checked")).toBe("true");
+    expect(standard?.getAttribute("aria-checked")).toBe("false");
     toolbar.destroy();
   });
 

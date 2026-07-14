@@ -1,36 +1,63 @@
 import { setElementCssProps } from "../dom/typeGuards";
-import { DEFAULT_SETTINGS, type DrawingTool, type ToolPreferences } from "../model";
+import {
+  DEFAULT_SETTINGS,
+  DRAWING_TOOLS,
+  resolveDrawingTool,
+  type DrawingTool,
+  type ToolPreferences
+} from "../model";
 import type { DropdownOption } from "./DropdownController";
 
 export const DRAWING_WIDTHS = [0.35, 0.5, 0.8, 1.5, 2.5, 4.5, 7] as const;
+export const HIGHLIGHTER_WIDTHS = [6, 10, 14, 18, 24, 32, 40] as const;
 const WIDTH_LABELS = ["Hairline", "Ultra Fine", "Extra Fine", "Fine", "Medium", "Thick", "Extra Thick"] as const;
+const HIGHLIGHTER_WIDTH_LABELS = [
+  "Narrow",
+  "Fine",
+  "Medium",
+  "Wide",
+  "Broad",
+  "Extra Broad",
+  "Max"
+] as const;
+
+const TOOL_LABELS: Record<DrawingTool, string> = {
+  pen: "Pen",
+  pencil: "Pencil",
+  highlighter: "Highlighter"
+};
 
 export function drawingOptions(
   preferences: ToolPreferences,
   selectTool: (tool: DrawingTool) => void,
   selectWidth: (width: number) => void
 ): DropdownOption[] {
-  const tool = preferences.activeTool === "pencil" ? "pencil" : "pen";
+  const tool = resolveDrawingTool(preferences.activeTool);
   const drawing = preferences[tool];
-  const tools: DropdownOption[] = (["pen", "pencil"] as const).map((id) => ({
+  const tools: DropdownOption[] = DRAWING_TOOLS.map((id) => ({
     id,
-    label: id === "pen" ? "Pen" : "Pencil",
+    label: TOOL_LABELS[id],
     active: tool === id,
     onSelect: () => selectTool(id)
   }));
-  const widths: DropdownOption[] = DRAWING_WIDTHS.map((width, index) => ({
+  const widths = tool === "highlighter" ? HIGHLIGHTER_WIDTHS : DRAWING_WIDTHS;
+  const labels = tool === "highlighter" ? HIGHLIGHTER_WIDTH_LABELS : WIDTH_LABELS;
+  const widthOptions: DropdownOption[] = widths.map((width, index) => ({
     id: `width-${width}`,
-    label: `${WIDTH_LABELS[index]} (${width})`,
+    label: `${labels[index]} (${width})`,
     active: drawing.width === width,
     render: (button) => {
       const preview = button.ownerDocument.createElement("span");
       preview.className = "native-pdf-handwriting-width-preview";
-      setElementCssProps(preview, { "--ink-preview-width": `${width}px`, "--ink-preview-color": drawing.color });
+      setElementCssProps(preview, {
+        "--ink-preview-width": `${Math.min(12, width)}px`,
+        "--ink-preview-color": drawing.color
+      });
       button.prepend(preview);
     },
     onSelect: () => selectWidth(width)
   }));
-  return [...tools, ...widths];
+  return [...tools, ...widthOptions];
 }
 
 export function drawingAdvanced(
@@ -39,7 +66,7 @@ export function drawingAdvanced(
   onChange: () => void,
   signal: AbortSignal
 ): HTMLElement {
-  const tool = preferences.activeTool === "pencil" ? "pencil" : "pen";
+  const tool = resolveDrawingTool(preferences.activeTool);
   const drawing = preferences[tool];
   const details = ownerDocument.createElement("details");
   details.className = "native-pdf-handwriting-advanced";
@@ -52,6 +79,7 @@ export function drawingAdvanced(
     ["Texture", "textureStrength", 0, 1, 0.05]
   ];
   for (const [label, key, min, max, step] of fields) {
+    if (tool === "highlighter" && key === "textureStrength") continue;
     const wrapper = ownerDocument.createElement("label");
     wrapper.textContent = label;
     const input = ownerDocument.createElement("input");
@@ -72,6 +100,7 @@ export function drawingAdvanced(
     ["Tilt sensitivity", "tiltSensitivity"],
     ["Simulate mouse pressure", "simulateMousePressure"]
   ] as const) {
+    if (tool === "highlighter" && key === "tiltSensitivity") continue;
     const wrapper = ownerDocument.createElement("label");
     const input = ownerDocument.createElement("input");
     input.type = "checkbox";

@@ -1,4 +1,5 @@
-import type { InkStroke, PdfPoint, PluginSettings, ToolbarPlacement, ToolPreferences } from "../model";
+import type { DrawingTool, InkStroke, PdfPoint, PluginSettings, ToolbarPlacement, ToolPreferences } from "../model";
+import { isInkDrawTool, resolveDrawingTool } from "../model";
 import type { ObsidianPdfAdapter } from "../integration/ObsidianPdfAdapter";
 import type { PdfPageInfo } from "../integration/PdfPageLocator";
 import { PointerRouter } from "../input/PointerRouter";
@@ -17,6 +18,12 @@ import { AddStrokeCommand, AddStrokesCommand, DeleteStrokesCommand, ReplacePageS
 import { CommandHistory, type Command } from "../history/CommandHistory";
 import { eraseStrokes } from "../tools/EraserTool";
 import { boundingShapeFromStrokes, filterSelectableStrokes, selectStrokes, selectionShapeArea, shapeBounds, shapeContainsPoint, translateShape, type SelectionShape } from "../tools/LassoTool";
+import { drawHighlighterStroke } from "../tools/HighlighterTool";
+import {
+  drawLaserStroke,
+  laserTrailStillVisible,
+  mapLaserPoints
+} from "../tools/LaserTool";
 import { drawGraphiteStroke, seedFromId } from "../tools/PencilTool";
 import { drawPenStroke } from "../tools/PenTool";
 import { AutosaveQueue } from "../storage/AutosaveQueue";
@@ -26,7 +33,7 @@ import { SaveCoordinator, type CloseChoice } from "../storage/SaveCoordinator";
 import { SidecarRepository } from "../storage/SidecarRepository";
 import { pickNewerSidecar, serializeSidecar, countSidecarStrokes, type SidecarSchemaV1 } from "../storage/SidecarSchema";
 import type { VaultSyncWriter } from "../storage/VaultSyncWriter";
-import { AnnotationToolbar, type MoreAction, type ZoomAction } from "../ui/AnnotationToolbar";
+import { AnnotationToolbar, type MoreAction } from "../ui/AnnotationToolbar";
 import { inkBackingSize } from "./inkBackingSize";
 import type { DebugState } from "../ui/DebugPanel";
 import { SelectionToolbar, type ViewportPoint } from "../ui/SelectionToolbar";
@@ -66,6 +73,17 @@ export interface ViewerInkSessionOptions {
   livePersistEpoch?: (documentId: string) => number;
 }
 
+interface LaserTrail {
+  id: string;
+  page: number;
+  points: PdfPoint[];
+  color: string;
+  width: number;
+  opacity: number;
+  holdMs: number;
+  fadeMs: number;
+}
+
 interface PageSurface {
   page: PdfPageInfo;
   overlay: HTMLElement;
@@ -77,6 +95,8 @@ interface PageSurface {
   inkLayerValid: boolean;
   router: PointerRouter | null;
   builder: StrokeBuilder | undefined;
+  /** True while the live StrokeBuilder is a non-persisted laser draft. */
+  laserDraft: boolean;
   editPath: PdfPoint[];
   editTool: "eraser" | "lasso" | undefined;
   eraserSize: number | undefined;
@@ -116,6 +136,11 @@ export class ViewerInkSession {
   private zoomBurstScaleStart: number | null = null;
   private zoomBurstScaleEnd: number | null = null;
   private zoomBurstReason = "view-scalechanging";
+  private laserTrails: LaserTrail[] = [];
+  private laserFadeFrame: number | null = null;
+  private lastLaserPaintAt = 0;
+  /** Laser fade loop caps ~30fps — full page repaint every frame is too heavy. */
+  private static readonly LASER_FADE_MIN_MS = 32;
   private lastZoomSignalAt = 0;
   private zoomCompositing = false;
   private static readonly ZOOM_SETTLE_MS = 120;
@@ -158,7 +183,6 @@ export class ViewerInkSession {
         onUndo: () => this.history.undo(),
         onRedo: () => this.history.redo(),
         onSave: () => this.manualSave(),
-        onZoom: (action) => this.handleZoom(action),
         onMore: (action) => void this.handleMore(action),
         toolbarPlacement: () => this.options.toolbarPlacement?.() ?? this.options.settings.toolbarPlacement
       }
@@ -970,6 +994,11 @@ export class ViewerInkSession {
       }
     }
     this.destroyed = true;
+    if (this.laserFadeFrame !== null) {
+      window.cancelAnimationFrame(this.laserFadeFrame);
+      this.laserFadeFrame = null;
+    }
+    this.laserTrails = [];
     if (this.resizeFrame !== null) {
       window.cancelAnimationFrame(this.resizeFrame);
       this.resizeFrame = null;
@@ -996,7 +1025,7 @@ export class ViewerInkSession {
   private syncAnnotationCursorMode(enabled = this.drawEnabled): void {
     const tool = this.options.settings.toolPreferences.activeTool;
     const hideNativeCursor = enabled
-      && (tool === "pen" || tool === "pencil" || tool === "eraser");
+      && (isInkDrawTool(tool) || tool === "eraser");
     this.options.adapter.root.classList.toggle("native-pdf-handwriting-hide-native-cursor", hideNativeCursor);
   }
 
@@ -1053,6 +1082,7 @@ export class ViewerInkSession {
       inkLayerValid: false,
       router: null,
       builder: undefined,
+      laserDraft: false,
       editPath: [],
       editTool: undefined,
       eraserSize: undefined
@@ -1071,11 +1101,9 @@ export class ViewerInkSession {
       cursorParent: () => surface.overlay,
       eraserCursorDiameter: () => this.options.settings.toolPreferences.eraser.size * this.displayScale(surface),
       drawCursorColor: () => {
-        const tool = this.options.settings.toolPreferences.activeTool;
-        const drawing = tool === "pencil"
-          ? this.options.settings.toolPreferences.pencil
-          : this.options.settings.toolPreferences.pen;
-        return drawing.color;
+        const prefs = this.options.settings.toolPreferences;
+        if (prefs.activeTool === "laser") return prefs.laser.color;
+        return prefs[resolveDrawingTool(prefs.activeTool)].color;
       },
       projectCursor: (clientX, clientY) => this.projectInkScreenPoint(surface, clientX, clientY),
       onStart: (samples, route, event) => this.pointerStart(surface, samples, route, event),
@@ -1104,31 +1132,56 @@ export class ViewerInkSession {
 
   private pointerStart(surface: PageSurface, samples: PointerSample[], route: "draw" | "edit", event: PointerEvent): void {
     const preferences = this.options.settings.toolPreferences;
-    // Selected ink: drag inside selection moves it even when pen/pencil is active.
+    // Selected ink: drag inside selection moves it even when a drawing tool is active.
     if (this.tryStartSelectionMove(surface, samples[0]!)) {
       this.renderPage(surface.page.pageNumber);
       return;
     }
     if (route === "draw") {
-      const tool = preferences.activeTool === "pencil" ? "pencil" : "pen";
-      const drawing = preferences[tool];
-      surface.builder = new StrokeBuilder({
-        id: this.id(),
-        page: surface.page.pageNumber,
-        tool,
-        color: drawing.color,
-        width: drawing.width,
-        opacity: drawing.opacity,
-        inputType: event.pointerType === "pen" ? "pen" : "mouse",
-        stabilization: drawing.stabilization
-      });
-      for (const sample of samples) surface.builder.add(this.toPdfPoint(surface, sample, drawing.simulateMousePressure));
-      const first = surface.builder.preview(this.simplifyStrokesEnabled())[0];
-      if (first) {
-        this.lastPointerPdf = { x: first.x, y: first.y };
-        this.logDraw(surface, "start", tool, [first]);
+      const laser = preferences.activeTool === "laser";
+      if (laser) {
+        const laserPrefs = preferences.laser;
+        surface.laserDraft = true;
+        surface.builder = new StrokeBuilder({
+          id: this.id(),
+          page: surface.page.pageNumber,
+          tool: "pen",
+          color: laserPrefs.color,
+          width: laserPrefs.width,
+          opacity: laserPrefs.opacity,
+          inputType: event.pointerType === "pen" ? "pen" : "mouse",
+          stabilization: "medium"
+        });
+        for (const sample of samples) surface.builder.add(this.toPdfPoint(surface, sample, false));
+        const first = surface.builder.preview(true)[0];
+        if (first) {
+          this.lastPointerPdf = { x: first.x, y: first.y };
+          this.logDraw(surface, "start", "laser", [first]);
+        }
+        this.logPositionAlign(surface, samples[0]!, "start");
+        this.ensureLaserFadeLoop();
+      } else {
+        surface.laserDraft = false;
+        const tool = resolveDrawingTool(preferences.activeTool);
+        const drawing = preferences[tool];
+        surface.builder = new StrokeBuilder({
+          id: this.id(),
+          page: surface.page.pageNumber,
+          tool,
+          color: drawing.color,
+          width: drawing.width,
+          opacity: drawing.opacity,
+          inputType: event.pointerType === "pen" ? "pen" : "mouse",
+          stabilization: drawing.stabilization
+        });
+        for (const sample of samples) surface.builder.add(this.toPdfPoint(surface, sample, drawing.simulateMousePressure));
+        const first = surface.builder.preview(this.simplifyStrokesEnabled())[0];
+        if (first) {
+          this.lastPointerPdf = { x: first.x, y: first.y };
+          this.logDraw(surface, "start", tool, [first]);
+        }
+        this.logPositionAlign(surface, samples[0]!, "start");
       }
-      this.logPositionAlign(surface, samples[0]!, "start");
     } else {
       if (preferences.activeTool === "lasso" && this.selected.length > 0) {
         const point = this.toPdfPoint(surface, samples[0]!, true);
@@ -1156,11 +1209,15 @@ export class ViewerInkSession {
       return;
     }
     if (route === "draw" && surface.builder) {
-      const tool = this.options.settings.toolPreferences.activeTool === "pencil" ? "pencil" : "pen";
-      const simulate = this.options.settings.toolPreferences[tool].simulateMousePressure;
+      const simulate = surface.laserDraft
+        ? false
+        : this.options.settings.toolPreferences[
+          resolveDrawingTool(this.options.settings.toolPreferences.activeTool)
+        ].simulateMousePressure;
       for (const sample of samples) surface.builder.add(this.toPdfPoint(surface, sample, simulate));
       const last = samples.at(-1);
       if (last) this.logPositionAlign(surface, last, "move");
+      if (surface.laserDraft) this.ensureLaserFadeLoop();
     } else if (route === "edit") {
       surface.editPath.push(...samples.map((sample) => this.toPdfPoint(surface, sample, true)));
     }
@@ -1187,16 +1244,46 @@ export class ViewerInkSession {
       return;
     }
     if (route === "draw" && surface.builder) {
-      const tool = this.options.settings.toolPreferences.activeTool === "pencil" ? "pencil" : "pen";
-      const simulate = this.options.settings.toolPreferences[tool].simulateMousePressure;
+      const laserDraft = surface.laserDraft;
+      const simulate = laserDraft
+        ? false
+        : this.options.settings.toolPreferences[
+          resolveDrawingTool(this.options.settings.toolPreferences.activeTool)
+        ].simulateMousePressure;
       for (const sample of samples) surface.builder.add(this.toPdfPoint(surface, sample, simulate));
-      const stroke = surface.builder.finish(this.simplifyStrokesEnabled());
-      this.history.execute(new AddStrokeCommand(this.ink, stroke));
-      this.lastPointerPdf = stroke.points.at(-1) ? { x: stroke.points.at(-1)!.x, y: stroke.points.at(-1)!.y } : this.lastPointerPdf;
-      this.logDraw(surface, "end", tool, stroke.points);
+      // Match live preview geometry — finish()+simplify reshapes the path → visible snap.
+      const stroke = surface.builder.finishMatchingPreview(
+        laserDraft ? true : this.simplifyStrokesEnabled()
+      );
+      surface.builder = undefined;
+      surface.laserDraft = false;
+      if (laserDraft) {
+        const laser = this.options.settings.toolPreferences.laser;
+        this.laserTrails.push({
+          id: stroke.id,
+          page: stroke.page,
+          points: stroke.points,
+          color: laser.color,
+          width: laser.width,
+          opacity: laser.opacity,
+          holdMs: laser.holdMs,
+          fadeMs: laser.fadeMs
+        });
+        this.lastPointerPdf = stroke.points.at(-1)
+          ? { x: stroke.points.at(-1)!.x, y: stroke.points.at(-1)!.y }
+          : this.lastPointerPdf;
+        this.logDraw(surface, "end", "laser", stroke.points);
+        this.ensureLaserFadeLoop();
+      } else {
+        const tool = resolveDrawingTool(this.options.settings.toolPreferences.activeTool);
+        this.history.execute(new AddStrokeCommand(this.ink, stroke));
+        this.lastPointerPdf = stroke.points.at(-1)
+          ? { x: stroke.points.at(-1)!.x, y: stroke.points.at(-1)!.y }
+          : this.lastPointerPdf;
+        this.logDraw(surface, "end", tool, stroke.points);
+      }
       const last = samples.at(-1);
       if (last) this.logPositionAlign(surface, last, "end");
-      surface.builder = undefined;
     } else if (route === "edit") {
       surface.editPath.push(...samples.map((sample) => this.toPdfPoint(surface, sample, true)));
       const tool = this.options.settings.toolPreferences.activeTool;
@@ -1215,6 +1302,7 @@ export class ViewerInkSession {
     this.movePreview = null;
     this.moveShapePreview = null;
     surface.builder = undefined;
+    surface.laserDraft = false;
     surface.editPath = [];
     surface.editTool = undefined;
     surface.eraserSize = undefined;
@@ -1696,21 +1784,145 @@ export class ViewerInkSession {
       this.drawSelectionShape(surface, this.moveShapePreview ?? this.selectionShape, { closeFreeform: true });
     }
     if (surface.builder?.preview().length) {
-      const drawing = this.options.settings.toolPreferences[
-        this.options.settings.toolPreferences.activeTool === "pencil" ? "pencil" : "pen"
-      ];
-      this.drawPoints(
+      if (surface.laserDraft) {
+        const laser = this.options.settings.toolPreferences.laser;
+        this.paintLaserPoints(
+          surface,
+          surface.builder.preview(true),
+          laser.color,
+          laser.width,
+          laser.opacity,
+          laser.holdMs,
+          laser.fadeMs
+        );
+      } else {
+        const tool = resolveDrawingTool(this.options.settings.toolPreferences.activeTool);
+        const drawing = this.options.settings.toolPreferences[tool];
+        const draftId = surface.builder.id;
+        this.drawPoints(
+          surface,
+          surface.builder.preview(this.simplifyStrokesEnabled()),
+          drawing.color,
+          drawing.width,
+          drawing.opacity,
+          tool,
+          false,
+          draftId,
+          // Pencil: full grit while dragging so release does not densify/reseed.
+          tool === "pencil" ? "full" : "draft"
+        );
+      }
+    }
+    this.paintLaserTrails(surface, pageNumber);
+  }
+
+  private paintLaserPoints(
+    surface: PageSurface,
+    points: readonly PdfPoint[],
+    color: string,
+    width: number,
+    opacity: number,
+    holdMs: number,
+    fadeMs: number
+  ): void {
+    if (!points.length) return;
+    const mapper = this.mapper(surface);
+    const scale = this.displayScale(surface);
+    drawLaserStroke(surface.context, mapLaserPoints(points, (point) => mapper.toViewport(point)), {
+      color,
+      width: Math.max(1, width * scale),
+      opacity,
+      nowMs: performance.now(),
+      holdMs,
+      fadeMs
+    });
+    this.lastLaserPaintAt = performance.now();
+  }
+
+  private paintLaserTrails(surface: PageSurface, pageNumber: number): void {
+    for (const trail of this.laserTrails) {
+      if (trail.page !== pageNumber) continue;
+      this.paintLaserPoints(
         surface,
-        surface.builder.preview(this.simplifyStrokesEnabled()),
-        drawing.color,
-        drawing.width,
-        drawing.opacity,
-        this.options.settings.toolPreferences.activeTool === "pencil",
-        false,
-        undefined,
-        "draft"
+        trail.points,
+        trail.color,
+        trail.width,
+        trail.opacity,
+        trail.holdMs,
+        trail.fadeMs
       );
     }
+  }
+
+  /** Blit cached ink + lasers only — avoids full committed-stroke rebuild every fade tick. */
+  private repaintLaserOverlay(pageNumber: number): void {
+    const surface = this.surfaces.get(pageNumber);
+    if (!surface) return;
+    if (!surface.inkLayerValid || !surface.inkLayer) {
+      this.renderPage(pageNumber);
+      return;
+    }
+    const rect = surface.overlay.getBoundingClientRect();
+    const layout = this.pageLayout(surface);
+    const width = Math.max(1, rect.width >= 8 ? rect.width : layout.contentWidth || 1);
+    const height = Math.max(1, rect.height >= 8 ? rect.height : layout.contentHeight || 1);
+    const { pixelWidth, pixelHeight, backingScale } = inkBackingSize(
+      width,
+      height,
+      window.devicePixelRatio || 1
+    );
+    // Must restore CSS-pixel transform after the identity blit — same as blitInkLayerToCanvas.
+    this.blitInkLayerToCanvas(surface, pixelWidth, pixelHeight, backingScale);
+    if (surface.builder?.preview().length && surface.laserDraft) {
+      const laser = this.options.settings.toolPreferences.laser;
+      this.paintLaserPoints(
+        surface,
+        surface.builder.preview(true),
+        laser.color,
+        laser.width,
+        laser.opacity,
+        laser.holdMs,
+        laser.fadeMs
+      );
+    } else if (surface.builder?.preview().length && !surface.laserDraft) {
+      this.renderPage(pageNumber);
+      return;
+    }
+    this.paintLaserTrails(surface, pageNumber);
+  }
+
+  private ensureLaserFadeLoop(): void {
+    if (this.destroyed || this.laserFadeFrame !== null) return;
+    const view = this.options.adapter.host.ownerDocument.defaultView;
+    if (!view) return;
+    const tick = (now: number): void => {
+      this.laserFadeFrame = null;
+      if (this.destroyed) return;
+
+      const dirtyPages = new Set<number>();
+      for (const trail of this.laserTrails) dirtyPages.add(trail.page);
+      for (const surface of this.surfaces.values()) {
+        if (surface.laserDraft) dirtyPages.add(surface.page.pageNumber);
+      }
+
+      this.laserTrails = this.laserTrails.filter((trail) => {
+        dirtyPages.add(trail.page);
+        return laserTrailStillVisible(trail.points, now, trail.holdMs, trail.fadeMs);
+      });
+
+      // Skip if pointermove just painted (avoids double full-canvas work while dragging).
+      const recentlyPainted = now - this.lastLaserPaintAt < ViewerInkSession.LASER_FADE_MIN_MS;
+      if (!recentlyPainted) {
+        for (const page of dirtyPages) this.repaintLaserOverlay(page);
+      }
+
+      const stillActive = this.laserTrails.length > 0
+        || [...this.surfaces.values()].some((surface) => surface.laserDraft);
+      if (stillActive) {
+        this.laserFadeFrame = view.requestAnimationFrame(tick);
+      }
+    };
+    this.laserFadeFrame = view.requestAnimationFrame(tick);
   }
 
   private drawLassoPreview(surface: PageSurface): void {
@@ -1791,7 +2003,7 @@ export class ViewerInkSession {
       stroke.color,
       stroke.width,
       stroke.opacity,
-      stroke.tool === "pencil",
+      stroke.tool,
       selected,
       stroke.id,
       graphiteQuality
@@ -1804,7 +2016,7 @@ export class ViewerInkSession {
     color: string,
     width: number,
     opacity: number,
-    pencil: boolean,
+    tool: DrawingTool,
     selected = false,
     strokeId?: string,
     graphiteQuality: "full" | "draft" = "full"
@@ -1814,7 +2026,7 @@ export class ViewerInkSession {
     const context = surface.context;
     const scale = this.displayScale(surface);
     context.save();
-    if (pencil) {
+    if (tool === "pencil") {
       const prefs = this.options.settings.toolPreferences.pencil;
       const viewPoints = points.map((point) => {
         const view = mapper.toViewport(point);
@@ -1836,6 +2048,19 @@ export class ViewerInkSession {
         thinning: prefs.thinning,
         seed: strokeId ? seedFromId(strokeId) : seedFromId(`${viewPoints[0]!.x}:${viewPoints[0]!.y}`),
         quality: graphiteQuality
+      });
+    } else if (tool === "highlighter") {
+      const prefs = this.options.settings.toolPreferences.highlighter;
+      const viewPoints = points.map((point) => {
+        const view = mapper.toViewport(point);
+        return { x: view.x, y: view.y, pressure: point.pressure };
+      });
+      drawHighlighterStroke(context, viewPoints, {
+        color,
+        width: Math.max(2, width * scale),
+        opacity,
+        pressureSensitivity: prefs.pressureSensitivity,
+        thinning: prefs.thinning
       });
     } else {
       const prefs = this.options.settings.toolPreferences.pen;
@@ -2150,39 +2375,6 @@ export class ViewerInkSession {
 
   private currentToolbarPlacement(): ToolbarPlacement {
     return this.options.toolbarPlacement?.() ?? this.options.settings.toolbarPlacement ?? "main";
-  }
-
-  private handleZoom(action: ZoomAction): void {
-    const adapter = this.options.adapter;
-    if (action === "in") {
-      adapter.zoomBySteps?.(1);
-      return;
-    }
-    if (action === "out") {
-      adapter.zoomBySteps?.(-1);
-      return;
-    }
-    const named: Partial<Record<ZoomAction, string>> = {
-      "fit-width": "page-width",
-      "fit-page": "page-fit",
-      reset: "page-width"
-    };
-    const scales: Partial<Record<ZoomAction, number>> = {
-      actual: 1,
-      "200": 2,
-      "400": 4,
-      "800": 8,
-      "1000": 10,
-      "1500": 15,
-      "2000": 20
-    };
-    const namedValue = named[action];
-    if (namedValue) {
-      adapter.setScaleValue?.(namedValue);
-      return;
-    }
-    const scale = scales[action];
-    if (scale != null) adapter.setScale?.(scale);
   }
 
   private async handleMore(action: MoreAction): Promise<void> {

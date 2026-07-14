@@ -51,4 +51,23 @@ describe("stroke builder", () => {
     builder.add(point(2, 1));
     expect(builder.preview(false)).toEqual(builder.finish(false).points);
   });
+
+  it("finishMatchingPreview keeps live preview geometry (no release snap)", () => {
+    const opts = { ...base, stabilization: "medium" as const };
+    const builder = new StrokeBuilder(opts);
+    for (const p of [point(0, 0), point(1, 0.01), point(2, 0), point(3, 0.02), point(4, 0)]) {
+      builder.add(p);
+    }
+    const preview = builder.preview(true);
+    const matched = builder.finishMatchingPreview(true).points;
+    expect(matched).toEqual(preview);
+    expect(builder.id).toBe("stroke-1");
+
+    const simplifyBuilder = new StrokeBuilder(opts);
+    for (const p of [point(0, 0), point(1, 0.01), point(2, 0), point(3, 0.02), point(4, 0)]) {
+      simplifyBuilder.add(p);
+    }
+    // Regular finish simplifies — that was the release snap.
+    expect(simplifyBuilder.finish(true).points.length).toBeLessThan(matched.length);
+  });
 });

@@ -28,26 +28,38 @@ export class SidecarRepository {
   async save(sidecar: SidecarSchemaV1): Promise<void> {
     const path = this.pathFor(sidecar.document.id);
     const next = serializeSidecar(sidecar);
-    if (this.files.rename) {
+    const previous = await this.files.exists(path) ? await this.files.read(path) : null;
+
+    // Stage + validate via temp, then commit. Obsidian's adapter.rename throws
+    // "Destination file already exists!" when replacing, so overwriting dest uses
+    // write (not rename) whenever the sidecar path is already present.
+    if (this.files.rename || this.files.remove) {
       const temp = `${path}.tmp`;
       await this.files.write(temp, next);
       try {
         this.migration.migrate(await this.files.read(temp));
-        await this.files.rename(temp, path);
+        if (previous !== null) {
+          await this.files.write(path, next);
+          if (this.files.remove) await this.files.remove(temp);
+        } else if (this.files.rename) {
+          await this.files.rename(temp, path);
+        } else {
+          await this.files.write(path, next);
+          if (this.files.remove) await this.files.remove(temp);
+        }
       } catch (error) {
         if (this.files.remove && await this.files.exists(temp)) await this.files.remove(temp);
+        if (previous !== null) await this.files.write(path, previous);
         throw error;
       }
       return;
     }
 
-    const previous = await this.files.exists(path) ? await this.files.read(path) : null;
     try {
       await this.files.write(path, next);
       this.migration.migrate(await this.files.read(path));
     } catch (error) {
       if (previous !== null) await this.files.write(path, previous);
-      else if (this.files.remove && await this.files.exists(path)) await this.files.remove(path);
       throw error;
     }
   }

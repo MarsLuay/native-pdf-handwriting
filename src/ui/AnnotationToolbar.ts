@@ -1,25 +1,20 @@
 import type { DrawingTool, SaveStatus, ToolId, ToolPreferences } from "../model";
+import { isDrawingTool, resolveDrawingTool } from "../model";
 import { colorOptions } from "./ColorPicker";
 import { DropdownController, type DropdownOpenOptions, type DropdownOption } from "./DropdownController";
 import { drawingAdvanced, drawingOptions } from "./DrawingToolDropdown";
 import { eraserMenu } from "./EraserDropdown";
+import { laserMenu } from "./LaserDropdown";
 import { lassoOptions } from "./LassoDropdown";
 import { SaveStatusIndicator } from "./SaveStatusIndicator";
 import { setToolbarColorSwatch, setToolbarIcon, type ToolbarIcon } from "./ToolbarIcon";
 
-export type ZoomAction =
-  | "out"
-  | "in"
-  | "fit-width"
-  | "fit-page"
-  | "actual"
-  | "reset"
-  | "200"
-  | "400"
-  | "800"
-  | "1000"
-  | "1500"
-  | "2000";
+const DRAWING_LABELS: Record<DrawingTool, string> = {
+  pen: "Pen",
+  pencil: "Pencil",
+  highlighter: "Highlighter"
+};
+
 export type MoreAction =
   | "export"
   | "toolbar-main"
@@ -33,7 +28,6 @@ export interface AnnotationToolbarCallbacks {
   onUndo?(): void;
   onRedo?(): void;
   onSave?(): void | Promise<void>;
-  onZoom?(action: ZoomAction): void;
   onMore?(action: MoreAction): void;
   toolbarPlacement?(): "main" | "left" | "right";
 }
@@ -65,7 +59,7 @@ export class AnnotationToolbar {
     this.callbacks = options.callbacks;
     this.preferences = options.preferences;
     this.autosave = options.autosave;
-    this.lastDrawingTool = options.preferences.activeTool === "pencil" ? "pencil" : "pen";
+    this.lastDrawingTool = resolveDrawingTool(options.preferences.activeTool);
     this.dropdown = new DropdownController(this.ownerDocument);
     this.saveStatus = new SaveStatusIndicator(this.ownerDocument);
     this.element = this.ownerDocument.createElement("div");
@@ -77,13 +71,13 @@ export class AnnotationToolbar {
     this.controls.className = "native-pdf-handwriting-toolbar-controls";
 
     this.controls.append(this.drawToggle(options.drawEnabled ?? false));
+    this.controls.append(this.colorButton());
     this.controls.append(this.groupedTool("drawing", () => this.drawingMenu()));
     this.controls.append(this.groupedTool("eraser", () => this.eraserMenuOptions()));
-    this.controls.append(this.colorButton());
+    this.controls.append(this.groupedTool("laser", () => this.laserMenuOptions()));
     this.controls.append(this.groupedTool("lasso", () => ({ label: "Lasso options", options: this.lassoMenu() })));
     this.controls.append(this.actionButton("undo", "Undo", () => this.callbacks.onUndo?.(), !this.callbacks.onUndo));
     this.controls.append(this.actionButton("redo", "Redo", () => this.callbacks.onRedo?.(), !this.callbacks.onRedo));
-    if (this.callbacks.onZoom) this.controls.append(this.menuButton("zoom", "Zoom", this.zoomMenu()));
     const supportedMore = options.supportedMoreActions ?? [];
     if (this.callbacks.onMore && supportedMore.length > 0) this.controls.append(this.menuButton("more", "More", this.moreMenu(supportedMore)));
     if (!this.autosave && this.callbacks.onSave) this.controls.append(this.actionButton("save", "Save", () => void this.callbacks.onSave?.()));
@@ -112,10 +106,10 @@ export class AnnotationToolbar {
     this.element.remove();
   }
 
-  private groupedTool(id: "drawing" | "eraser" | "lasso", menu: () => DropdownOpenOptions): HTMLButtonElement {
+  private groupedTool(id: "drawing" | "eraser" | "lasso" | "laser", menu: () => DropdownOpenOptions): HTMLButtonElement {
     const main = this.actionButton(id, id, () => {
       const active = id === "drawing"
-        ? this.preferences.activeTool === "pen" || this.preferences.activeTool === "pencil"
+        ? isDrawingTool(this.preferences.activeTool)
         : this.preferences.activeTool === id;
       if (active) this.dropdown.toggle(id, main, menu());
       else this.activate(id === "drawing" ? this.lastDrawingTool : id);
@@ -170,9 +164,9 @@ export class AnnotationToolbar {
     switch (id) {
       case "eraser":
       case "lasso":
+      case "laser":
       case "undo":
       case "redo":
-      case "zoom":
       case "more":
       case "save":
         return id;
@@ -201,6 +195,13 @@ export class AnnotationToolbar {
     })) content.append(this.inlineOption(option));
     content.append(drawingAdvanced(this.ownerDocument, this.preferences, () => this.changed(), this.abort.signal));
     return { label: "Drawing options", content };
+  }
+
+  private laserMenuOptions(): DropdownOpenOptions {
+    return {
+      label: "Laser options",
+      content: laserMenu(this.ownerDocument, this.preferences, () => this.changed(), this.abort.signal)
+    };
   }
 
   private eraserMenuOptions(): DropdownOpenOptions {
@@ -243,54 +244,39 @@ export class AnnotationToolbar {
 
   private colorMenu(): HTMLElement {
     const content = this.ownerDocument.createElement("div");
-    const drawingTool = this.preferences.activeTool === "pencil" ? "pencil" : "pen";
-    for (const option of colorOptions(this.preferences, (color) => {
-      this.preferences[drawingTool].color = color;
+    const laserActive = this.preferences.activeTool === "laser";
+    const drawingTool = resolveDrawingTool(this.preferences.activeTool);
+    const applyColor = (color: string): void => {
+      if (laserActive) this.preferences.laser.color = color;
+      else this.preferences[drawingTool].color = color;
       this.changed();
-    })) content.append(this.inlineOption(option));
+    };
+    for (const option of colorOptions(this.preferences, applyColor)) content.append(this.inlineOption(option));
     const colorLabel = this.ownerDocument.createElement("label");
     colorLabel.textContent = "Custom color";
     const colorInput = this.ownerDocument.createElement("input");
     colorInput.type = "color";
-    colorInput.value = this.preferences[drawingTool].color;
-    colorInput.addEventListener("input", () => {
-      this.preferences[drawingTool].color = colorInput.value;
-      this.changed();
-    }, { signal: this.abort.signal });
+    colorInput.value = laserActive ? this.preferences.laser.color : this.preferences[drawingTool].color;
+    colorInput.addEventListener("input", () => applyColor(colorInput.value), { signal: this.abort.signal });
     colorLabel.append(colorInput);
-    const opacityLabel = this.ownerDocument.createElement("label");
-    opacityLabel.textContent = "Opacity";
-    const opacity = this.ownerDocument.createElement("input");
-    opacity.type = "range";
-    opacity.min = "0.1";
-    opacity.max = "1";
-    opacity.step = "0.05";
-    opacity.value = String(this.preferences[drawingTool].opacity);
-    opacity.addEventListener("input", () => {
-      this.preferences[drawingTool].opacity = Number(opacity.value);
-      this.changed();
-    }, { signal: this.abort.signal });
-    opacityLabel.append(opacity);
-    content.append(colorLabel, opacityLabel);
+    content.append(colorLabel);
+    if (!laserActive) {
+      const opacityLabel = this.ownerDocument.createElement("label");
+      opacityLabel.textContent = "Opacity";
+      const opacity = this.ownerDocument.createElement("input");
+      opacity.type = "range";
+      opacity.min = "0.1";
+      opacity.max = "1";
+      opacity.step = "0.05";
+      opacity.value = String(this.preferences[drawingTool].opacity);
+      opacity.addEventListener("input", () => {
+        this.preferences[drawingTool].opacity = Number(opacity.value);
+        this.changed();
+      }, { signal: this.abort.signal });
+      opacityLabel.append(opacity);
+      content.append(opacityLabel);
+    }
     return content;
-  }
-
-  private zoomMenu(): DropdownOption[] {
-    const labels: Array<[ZoomAction, string]> = [
-      ["out", "Zoom out"],
-      ["in", "Zoom in"],
-      ["fit-width", "Fit width"],
-      ["fit-page", "Fit page"],
-      ["actual", "Actual size (100%)"],
-      ["200", "200%"],
-      ["400", "400%"],
-      ["800", "800%"],
-      ["1000", "1000%"],
-      ["1500", "1500%"],
-      ["2000", "2000%"],
-      ["reset", "Reset zoom"]
-    ];
-    return labels.map(([id, label]) => ({ id, label, onSelect: () => this.callbacks.onZoom?.(id) }));
   }
 
   private moreMenu(supported: MoreAction[]): DropdownOption[] {
@@ -327,7 +313,7 @@ export class AnnotationToolbar {
 
   private activate(tool: ToolId): void {
     this.preferences.activeTool = tool;
-    if (tool === "pen" || tool === "pencil") this.lastDrawingTool = tool;
+    if (isDrawingTool(tool)) this.lastDrawingTool = tool;
     this.changed();
   }
 
@@ -338,18 +324,26 @@ export class AnnotationToolbar {
 
   private updateButtons(): void {
     const active = this.preferences.activeTool;
-    this.presentButton(this.buttons.get("drawing")!, this.lastDrawingTool === "pen" ? "Pen" : "Pencil", this.lastDrawingTool);
+    this.presentButton(
+      this.buttons.get("drawing")!,
+      DRAWING_LABELS[this.lastDrawingTool],
+      this.lastDrawingTool
+    );
     this.presentButton(this.buttons.get("eraser")!, "Eraser", "eraser");
+    this.presentButton(this.buttons.get("laser")!, "Laser pointer", "laser");
     this.presentButton(this.buttons.get("lasso")!, this.preferences.lasso.type === "freeform" ? "Lasso" : "Rectangle", "lasso");
-    this.buttons.get("drawing")!.setAttribute("aria-pressed", String(active === "pen" || active === "pencil"));
+    this.buttons.get("drawing")!.setAttribute("aria-pressed", String(isDrawingTool(active)));
     this.buttons.get("eraser")!.setAttribute("aria-pressed", String(active === "eraser"));
+    this.buttons.get("laser")!.setAttribute("aria-pressed", String(active === "laser"));
     this.buttons.get("lasso")!.setAttribute("aria-pressed", String(active === "lasso"));
-    const drawing = this.preferences[active === "pencil" ? "pencil" : "pen"];
+    const colorValue = active === "laser"
+      ? this.preferences.laser.color
+      : this.preferences[resolveDrawingTool(active)].color;
     const color = this.buttons.get("color");
     if (color) {
-      color.setAttribute("aria-label", `Color ${drawing.color}`);
+      color.setAttribute("aria-label", `Color ${colorValue}`);
       color.removeAttribute("title");
-      setToolbarColorSwatch(color, drawing.color);
+      setToolbarColorSwatch(color, colorValue);
     }
   }
 }

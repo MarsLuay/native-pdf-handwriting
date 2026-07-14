@@ -1,9 +1,9 @@
 import { setElementCssProps } from "../dom/typeGuards";
-import type { DrawingTool, ToolPreferences } from "../model";
+import { resolveDrawingTool, type ToolPreferences } from "../model";
 import type { DropdownOption } from "./DropdownController";
 
 export function colorOptions(preferences: ToolPreferences, select: (color: string) => void): DropdownOption[] {
-  const tool: DrawingTool = preferences.activeTool === "pencil" ? "pencil" : "pen";
+  const tool = resolveDrawingTool(preferences.activeTool);
   return preferences.recentColors.map((color) => ({
     id: color,
     label: color,

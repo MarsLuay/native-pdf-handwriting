@@ -1,5 +1,6 @@
 import { LineCapStyle, PDFDocument, rgb } from "pdf-lib";
 import { DEFAULT_SETTINGS, type InkStroke, type PdfPoint } from "../model";
+import { highlighterSampleWidth, highlighterSegmentWidths } from "../tools/HighlighterTool";
 import { graphiteStampCircles, seedFromId } from "../tools/PencilTool";
 import { penSampleWidth, penSegmentWidths } from "../tools/PenTool";
 
@@ -104,6 +105,48 @@ export class PdfExportService {
             size: stamp.radius,
             color,
             opacity: stamp.opacity
+          });
+        }
+        continue;
+      }
+
+      if (stroke.tool === "highlighter") {
+        const highlighter = DEFAULT_SETTINGS.toolPreferences.highlighter;
+        const prefs = {
+          ...highlighter,
+          width: strokeWidth,
+          opacity: stroke.opacity,
+          color: stroke.color
+        };
+        if (stroke.points.length === 1) {
+          const point = mapPoint(stroke.points[0]!);
+          page.drawCircle({
+            x: point.x,
+            y: point.y,
+            size: highlighterSampleWidth(prefs, stroke.points[0]!) / 2,
+            color,
+            opacity: stroke.opacity
+          });
+          continue;
+        }
+        const mappedPoints = stroke.points.map((point) => {
+          const mapped = mapPoint(point);
+          return { x: mapped.x, y: mapped.y, pressure: point.pressure };
+        });
+        for (const segment of highlighterSegmentWidths(mappedPoints, {
+          color: stroke.color,
+          width: strokeWidth,
+          opacity: stroke.opacity,
+          pressureSensitivity: highlighter.pressureSensitivity,
+          thinning: highlighter.thinning
+        })) {
+          page.drawLine({
+            start: { x: segment.start.x, y: segment.start.y },
+            end: { x: segment.end.x, y: segment.end.y },
+            thickness: segment.thickness,
+            color,
+            opacity: stroke.opacity,
+            lineCap: LineCapStyle.Round
           });
         }
         continue;

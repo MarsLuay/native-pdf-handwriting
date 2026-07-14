@@ -52,7 +52,8 @@ export function pencilSample(preferences: DrawingToolPreferences, point: PdfPoin
   const thinned = 1 - preferences.thinning * (1 - pressure);
   return {
     width: preferences.width * (0.75 + pressure * 0.7 + tilt * 0.35) * thinned,
-    opacity: Math.min(1, preferences.opacity * (0.48 + pressure * 0.48)),
+    // Stay readable on light pens; pressure still darkens slightly.
+    opacity: Math.min(1, preferences.opacity * (0.78 + pressure * 0.28)),
     textureStrength: preferences.textureStrength
   };
 }
@@ -103,8 +104,8 @@ function clamp01(value: number): number {
 export function graphiteSpacing(width: number, texture: number, quality: "full" | "draft"): number {
   const t = clamp01(texture);
   const draftBoost = quality === "draft" ? 1.55 : 1;
-  // ~0.2 tip diameters between stamps — looks like grit, stays O(1) under zoom-in.
-  const pitch = Math.max(1.15, width * (0.18 + (1 - t) * 0.1));
+  // Slightly tighter pitch → denser graphite body without solid pen fill.
+  const pitch = Math.max(1.0, width * (0.14 + (1 - t) * 0.08));
   return pitch * draftBoost;
 }
 
@@ -113,23 +114,22 @@ export function graphiteSpacing(width: number, texture: number, quality: "full" 
  */
 export function graphiteGrainCount(half: number, texture: number, quality: "full" | "draft"): number {
   const t = clamp01(texture);
-  const acrossFill = Math.min(2, Math.floor(half / 6));
-  const base = 2 + Math.floor(t * 2) + acrossFill;
+  const acrossFill = Math.min(3, Math.floor(half / 5));
+  const base = 3 + Math.floor(t * 3) + acrossFill;
   const draftScale = quality === "draft" ? 2 : 1;
-  return Math.max(2, Math.round(base / draftScale));
+  return Math.max(3, Math.round(base / draftScale));
 }
 
 /** Visual fleck size — grows slowly with tip width, never giant discs. */
 export function graphiteGrainSize(half: number, noise: number, texture: number): { rx: number; ry: number } {
   const t = clamp01(texture);
-  // ~0.35–1.35 px major for typical pens; scales gently with half.
-  const major = Math.max(0.32, Math.min(1.35, 0.28 + half * (0.045 + t * 0.015) + noise * 0.28));
-  // Paper tooth is short and skinny; higher texture → more needle-like.
-  const aspect = 2.0 + noise * (1.0 + t * 1.1);
-  const rx = Math.min(3.2, major * aspect);
+  // Heavier tooth so texture reads thick without blobbing into pen ink.
+  const major = Math.max(0.4, Math.min(1.7, 0.36 + half * (0.055 + t * 0.02) + noise * 0.34));
+  const aspect = 1.85 + noise * (0.9 + t * 0.95);
+  const rx = Math.min(3.8, major * aspect);
   return {
     rx,
-    ry: Math.max(0.2, Math.min(major * 0.85, rx / (aspect * (0.9 + t * 0.2))))
+    ry: Math.max(0.25, Math.min(major * 0.95, rx / (aspect * (0.85 + t * 0.18))))
   };
 }
 
@@ -161,15 +161,15 @@ export function graphiteMarks(
     const half = Math.max(0.75, width / 2);
     const tipWiden = 1 + tilt * 0.55;
 
-    // Sparse soft spine for export / faint body — fades as texture rises.
-    if (graphiteNoise(seed, index, 0) >= 0.35 + texture * 0.45) {
+    // Soft spine — denser body under grit (still not a solid pen tube).
+    if (graphiteNoise(seed, index, 0) >= 0.22 + texture * 0.35) {
       out.push({
         x: point.x,
         y: point.y,
-        rx: half * (0.7 + (1 - texture) * 0.25),
-        ry: half * (0.35 + (1 - texture) * 0.3) * tipWiden,
+        rx: half * (0.78 + (1 - texture) * 0.22),
+        ry: half * (0.42 + (1 - texture) * 0.28) * tipWiden,
         rotation: heading,
-        opacity: Math.min(0.22, opacity * (0.12 + (1 - texture) * 0.16)),
+        opacity: Math.min(0.42, opacity * (0.22 + (1 - texture) * 0.2)),
         kind: "spine"
       });
     }
@@ -180,8 +180,8 @@ export function graphiteMarks(
       const raw = graphiteNoise(seed, index, g * 9 + 1) * 2 - 1;
       const acrossUnit = Math.sign(raw) * Math.pow(Math.abs(raw), 0.72) * tipWiden;
       const edge = Math.min(1, Math.abs(acrossUnit));
-      // Porosity: skip more at margins + high texture.
-      const skip = 0.08 + texture * 0.28 + edge * edge * (0.28 + texture * 0.35);
+      // Less porosity → thicker readable texture (still ragged at edges).
+      const skip = 0.04 + texture * 0.16 + edge * edge * (0.18 + texture * 0.22);
       if (graphiteNoise(seed, index, g * 9 + 2) < skip) continue;
 
       const along = (graphiteNoise(seed, index, g * 9 + 3) - 0.5) * half * (0.4 + texture * 0.45);
@@ -194,11 +194,11 @@ export function graphiteMarks(
       const sizeNoise = graphiteNoise(seed, index, g * 9 + 5);
       const { rx, ry } = graphiteGrainSize(half, sizeNoise, texture);
       const grainA = Math.min(
-        0.72,
+        0.9,
         opacity
-          * (0.32 + texture * 0.28)
-          * (0.4 + graphiteNoise(seed, index, g * 9 + 6) * 0.5)
-          * (1 - edge * 0.4)
+          * (0.52 + texture * 0.3)
+          * (0.55 + graphiteNoise(seed, index, g * 9 + 6) * 0.45)
+          * (1 - edge * 0.28)
       );
 
       // Mix stroke-aligned flakes with paper-fiber angle (~35°) so it isn’t stamped.
@@ -217,20 +217,20 @@ export function graphiteMarks(
     }
 
     if (quality === "full") {
-      const flecks = 1 + Math.floor(texture * 2) + Math.min(2, Math.floor(half / 4));
+      const flecks = 2 + Math.floor(texture * 2) + Math.min(2, Math.floor(half / 4));
       for (let f = 0; f < flecks; f += 1) {
-        if (graphiteNoise(seed, index, f * 5 + 50) < 0.35 + texture * 0.22) continue;
+        if (graphiteNoise(seed, index, f * 5 + 50) < 0.22 + texture * 0.16) continue;
         const acrossUnit = (graphiteNoise(seed, index, f * 5 + 51) * 2 - 1) * tipWiden;
         const along = (graphiteNoise(seed, index, f * 5 + 52) - 0.5) * half;
         const across = acrossUnit * half * (0.9 + texture * 0.15);
-        const size = Math.max(0.2, Math.min(0.85, 0.18 + half * 0.025 + graphiteNoise(seed, index, f * 5 + 53) * 0.2));
+        const size = Math.max(0.28, Math.min(1.05, 0.26 + half * 0.035 + graphiteNoise(seed, index, f * 5 + 53) * 0.25));
         out.push({
           x: point.x + nx * across - ny * along,
           y: point.y + ny * across + nx * along,
           rx: size * (1.5 + texture * 0.8),
-          ry: size * 0.55,
+          ry: size * 0.6,
           rotation: heading + (graphiteNoise(seed, index, f * 5 + 54) - 0.5) * 1.4,
-          opacity: Math.min(0.5, opacity * (0.18 + texture * 0.28) * (0.4 + graphiteNoise(seed, index, f * 5 + 55) * 0.5)),
+          opacity: Math.min(0.72, opacity * (0.32 + texture * 0.34) * (0.5 + graphiteNoise(seed, index, f * 5 + 55) * 0.5)),
           kind: "fleck"
         });
       }
@@ -296,10 +296,10 @@ function drawSoftRibbon(
 
   if (points.length === 1) {
     const sample = sampleAt(options, points[0]!);
-    context.globalAlpha = Math.min(0.2, sample.opacity * (0.14 + (1 - texture) * 0.12));
+    context.globalAlpha = Math.min(0.38, sample.opacity * (0.28 + (1 - texture) * 0.16));
     context.fillStyle = options.color;
     context.beginPath();
-    context.arc(points[0]!.x, points[0]!.y, Math.max(0.55, sample.width * 0.32), 0, Math.PI * 2);
+    context.arc(points[0]!.x, points[0]!.y, Math.max(0.65, sample.width * 0.38), 0, Math.PI * 2);
     context.fill();
     context.restore();
     return;
@@ -307,7 +307,7 @@ function drawSoftRibbon(
 
   for (let i = 1; i < points.length; i += 1) {
     // Texture punches holes in the ribbon so it never reads as ink.
-    if (graphiteNoise(seed, i, 90) < texture * 0.55) continue;
+    if (graphiteNoise(seed, i, 90) < texture * 0.35) continue;
     const a = points[i - 1]!;
     const b = points[i]!;
     const mid = sampleAt(options, {
@@ -317,17 +317,17 @@ function drawSoftRibbon(
       tiltX: ((a.tiltX ?? 0) + (b.tiltX ?? 0)) / 2,
       tiltY: ((a.tiltY ?? 0) + (b.tiltY ?? 0)) / 2
     });
-    const haze = Math.min(0.14, mid.opacity * (0.08 + (1 - texture) * 0.1));
-    const core = Math.min(0.18, mid.opacity * (0.1 + (1 - texture) * 0.1));
+    const haze = Math.min(0.28, mid.opacity * (0.16 + (1 - texture) * 0.14));
+    const core = Math.min(0.34, mid.opacity * (0.18 + (1 - texture) * 0.14));
     context.globalAlpha = haze;
-    context.lineWidth = Math.max(0.7, mid.width * (0.95 + mid.tilt * 0.2));
+    context.lineWidth = Math.max(0.85, mid.width * (0.98 + mid.tilt * 0.2));
     context.beginPath();
     context.moveTo(a.x, a.y);
     context.lineTo(b.x, b.y);
     context.stroke();
-    if (graphiteNoise(seed, i, 91) < 0.4 + texture * 0.4) continue;
+    if (graphiteNoise(seed, i, 91) < 0.28 + texture * 0.32) continue;
     context.globalAlpha = core;
-    context.lineWidth = Math.max(0.5, mid.width * (0.55 + (1 - texture) * 0.12));
+    context.lineWidth = Math.max(0.6, mid.width * (0.62 + (1 - texture) * 0.14));
     context.beginPath();
     context.moveTo(a.x, a.y);
     context.lineTo(b.x, b.y);

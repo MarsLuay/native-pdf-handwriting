@@ -137,7 +137,7 @@ describe("PointerRouter", () => {
     expect(cursor?.isConnected).toBe(false);
   });
 
-  it("shows a small dot cursor for pen and pencil in draw mode", () => {
+  it("shows a small dot cursor for pen, pencil, highlighter, and laser in draw mode", () => {
     const element = document.createElement("div");
     element.getBoundingClientRect = () => ({
       x: 100, y: 50, left: 100, top: 50, right: 500, bottom: 650,
@@ -166,6 +166,28 @@ describe("PointerRouter", () => {
     expect(cursor?.hidden).toBe(true);
     router.destroy();
     expect(cursor?.isConnected).toBe(false);
+  });
+
+  it("routes laser pointer freehand as draw when Draw is on", () => {
+    const element = document.createElement("div");
+    document.body.append(element);
+    Object.assign(element, {
+      setPointerCapture: vi.fn(),
+      hasPointerCapture: () => false,
+      releasePointerCapture: vi.fn()
+    });
+    const starts = vi.fn();
+    const router = new PointerRouter(element, {
+      activeTool: () => "laser",
+      drawingEnabled: () => true,
+      onStart: starts
+    });
+    const mouse = pointer("mouse", 42);
+    element.dispatchEvent(mouse);
+    expect(mouse.defaultPrevented).toBe(true);
+    expect(starts).toHaveBeenCalledOnce();
+    expect(starts.mock.calls[0]?.[1]).toBe("draw");
+    router.destroy();
   });
 
   it("keeps the eraser cursor anchored to the pointer when the page layout shifts", () => {

@@ -125,7 +125,7 @@ describe("pencil graphite approximation", () => {
       thinning: 0,
       seed: 1
     });
-    expect(Math.max(...thick.filter((m) => m.kind === "grain").map((m) => m.rx))).toBeLessThan(3.5);
+    expect(Math.max(...thick.filter((m) => m.kind === "grain").map((m) => m.rx))).toBeLessThan(4.0);
     expect(thick.length).toBeLessThan(thin.length * 1.25);
     expect(zoomed.length).toBeLessThan(normal.length * 2.5);
     expect(zoomed.length).toBeLessThan(900);

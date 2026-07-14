@@ -1,3 +1,4 @@
+import type { VaultLogLevel } from "../logging/VaultLogSink";
 import type { ViewStateSource } from "../logging/SessionLogger";
 import type { PdfPageInfo } from "./PdfPageLocator";
 import type { ToolbarPlacement } from "../model";
@@ -13,6 +14,8 @@ export interface PdfAdapterCallbacks {
   onViewStateChange?(state: PdfViewState, source: ViewStateSource): void;
   onPagesChanged?(reason: string): void;
   onCompatibilityWarning?(message: string): void;
+  /** Optional vault debug sink (respects settings.vaultDebugLog). */
+  onDebugLog?(level: VaultLogLevel, event: string, payload?: Record<string, unknown>): void;
 }
 
 export interface ObsidianPdfAdapter {
@@ -25,10 +28,6 @@ export interface ObsidianPdfAdapter {
   scrollElement(): HTMLElement;
   mountOverlay(pageNumber: number): HTMLElement;
   mountToolbar(toolbar: HTMLElement, placement?: ToolbarPlacement): void;
-  setScale?(scale: number): boolean;
-  setScaleValue?(value: string | number): boolean;
-  zoomBySteps?(steps: number): boolean;
-  maxScale?(): number;
   compatibilityReport(): { errors: string[]; warnings: string[] };
   destroy(): void;
 }

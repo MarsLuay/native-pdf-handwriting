@@ -37,7 +37,7 @@ const isFiniteNumber = (value: unknown): value is number =>
 const isStroke = (value: unknown): value is InkStroke => {
   if (!isRecord(value) || !Array.isArray(value.points)) return false;
   return typeof value.id === "string" && Number.isInteger(value.page) &&
-    (value.tool === "pen" || value.tool === "pencil") &&
+    (value.tool === "pen" || value.tool === "pencil" || value.tool === "highlighter") &&
     typeof value.color === "string" && isFiniteNumber(value.width) && value.width > 0 &&
     isFiniteNumber(value.opacity) && value.opacity >= 0 && value.opacity <= 1 &&
     (value.inputType === "pen" || value.inputType === "mouse" || value.inputType === "touch") &&

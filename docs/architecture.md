@@ -34,7 +34,7 @@ Each attached viewer owns one disposable session. Closing PDF, removing embed, s
 
 ## First use
 
-Open PDF, enable Draw, select Pen or Pencil, write. Mouse/touch keep normal PDF controls until Draw is on. Status reads `Saved`, `Saving…`, `Unsaved changes`, or `Save failed`.
+Open PDF, enable Draw, select Pen, Pencil, Highlighter, or Laser. Pen/pencil/highlighter persist to the sidecar. Laser trails fade away after a short hold and are never saved. Mouse/touch keep normal PDF controls until Draw is on. Status reads `Saved`, `Saving…`, `Unsaved changes`, or `Save failed`.
 
 ## Offline behavior
 

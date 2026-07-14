@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.1.7 — 2026-07-14
+
+- Add an Excalidraw-style laser pointer: freehand trails that hold briefly, then fade and erase little-by-little. Never saved to the sidecar.
+- Add highlighter drawing tool (pen / pencil / highlighter) with wide translucent marker strokes, separate prefs, and PDF export.
+- Make pencil graphite denser and darker by default; keep grit without pen-like solid fill.
+- Fix stroke release snapping for laser and ink by committing live preview geometry and stable pencil grit seeds.
+- Point the laser tip as a fixed-length triangle that stays sharp while the trail shortens.
+- Reorder the ink rail to Draw, Color, Pen, Eraser, Laser, then Lasso.
+- Remove the ink toolbar Zoom button and its preset/scale APIs (fit, % jumps, in/out). Pinch, native Obsidian zoom, and high-zoom ceiling boost stay.
+- Fix left ink toolbar sitting under the open PDF outline/thumbnail sidebar; rail shifts to sit adjacent when the sidebar overlays it.
+- Deploy `main.js` / `styles.css` / `manifest.json` into the vault plugin folder on every build so Obsidian picks up local fixes.
+- Animate the left ink rail with the PDF sidebar: follow its edge while the outline/thumbnail pane opens or closes.
+
 ## 0.1.6 — 2026-07-14
 
 - Replace forbidden sentence-case lint suppressions with marketplace-compliant settings copy.

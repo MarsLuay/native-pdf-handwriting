@@ -1,8 +1,24 @@
-export type DrawingTool = "pen" | "pencil";
-export type ToolId = DrawingTool | "eraser" | "lasso" | "pan";
+export type DrawingTool = "pen" | "pencil" | "highlighter";
+export type ToolId = DrawingTool | "eraser" | "lasso" | "laser" | "pan";
 export type LassoType = "freeform" | "rectangle";
 export type ToolbarPlacement = "main" | "left" | "right";
 export type SaveStatus = "saved" | "saving" | "dirty" | "failed";
+
+export const DRAWING_TOOLS = ["pen", "pencil", "highlighter"] as const;
+
+export function isDrawingTool(tool: string): tool is DrawingTool {
+  return tool === "pen" || tool === "pencil" || tool === "highlighter";
+}
+
+/** Freehand ink routed as draw (persisted tools + ephemeral laser). */
+export function isInkDrawTool(tool: string): tool is DrawingTool | "laser" {
+  return isDrawingTool(tool) || tool === "laser";
+}
+
+/** Active drawing tool, or pen when a non-drawing tool is selected. */
+export function resolveDrawingTool(active: ToolId): DrawingTool {
+  return isDrawingTool(active) ? active : "pen";
+}
 
 export interface PdfPoint {
   x: number;
@@ -38,12 +54,25 @@ export interface DrawingToolPreferences {
   simulateMousePressure: boolean;
 }
 
+/** Ephemeral laser pointer — never written to sidecar. */
+export interface LaserPreferences {
+  color: string;
+  width: number;
+  opacity: number;
+  /** Full-opacity linger before fade starts (ms). */
+  holdMs: number;
+  /** Fade + trail erase duration after hold (ms). */
+  fadeMs: number;
+}
+
 export interface ToolPreferences {
   activeTool: ToolId;
   pen: DrawingToolPreferences;
   pencil: DrawingToolPreferences;
+  highlighter: DrawingToolPreferences;
   eraser: { size: number };
   lasso: { type: LassoType };
+  laser: LaserPreferences;
   recentColors: string[];
 }
 
@@ -94,8 +123,8 @@ export function createDefaultSettings(configDir: string): PluginSettings {
     },
     pencil: {
       color: "#4b5563",
-      width: 3.5,
-      opacity: 0.55,
+      width: 4,
+      opacity: 0.88,
       pressureSensitivity: true,
       stabilization: "low",
       thinning: 0.2,
@@ -103,9 +132,27 @@ export function createDefaultSettings(configDir: string): PluginSettings {
       tiltSensitivity: true,
       simulateMousePressure: true
     },
+    highlighter: {
+      color: "#facc15",
+      width: 14,
+      opacity: 0.35,
+      pressureSensitivity: false,
+      stabilization: "low",
+      thinning: 0.05,
+      textureStrength: 0,
+      tiltSensitivity: false,
+      simulateMousePressure: false
+    },
     eraser: { size: 12 },
     lasso: { type: "freeform" },
-    recentColors: ["#111827", "#2563eb", "#dc2626", "#059669", "#f59e0b"]
+    laser: {
+      color: "#ff0000",
+      width: 2,
+      opacity: 0.95,
+      holdMs: 900,
+      fadeMs: 1400
+    },
+    recentColors: ["#111827", "#2563eb", "#dc2626", "#059669", "#f59e0b", "#facc15"]
   }
   };
 }
@@ -154,8 +201,28 @@ export function mergeSettings(
       ...cleaned.toolPreferences,
       pen: { ...defaults.toolPreferences.pen, ...cleaned.toolPreferences?.pen },
       pencil: { ...defaults.toolPreferences.pencil, ...cleaned.toolPreferences?.pencil },
+      highlighter: {
+        ...defaults.toolPreferences.highlighter,
+        ...cleaned.toolPreferences?.highlighter
+      },
       eraser: { size: cleaned.toolPreferences?.eraser?.size ?? defaults.toolPreferences.eraser.size },
-      lasso
+      lasso,
+      laser: {
+        ...defaults.toolPreferences.laser,
+        ...cleaned.toolPreferences?.laser,
+        holdMs: clampLaserMs(
+          cleaned.toolPreferences?.laser?.holdMs ?? defaults.toolPreferences.laser.holdMs,
+          200,
+          3000,
+          defaults.toolPreferences.laser.holdMs
+        ),
+        fadeMs: clampLaserMs(
+          cleaned.toolPreferences?.laser?.fadeMs ?? defaults.toolPreferences.laser.fadeMs,
+          300,
+          4000,
+          defaults.toolPreferences.laser.fadeMs
+        )
+      }
     }
   };
   merged.sidecarFolder = remapPluginDataPath(cleaned.sidecarFolder, defaults.sidecarFolder, configDir);
@@ -173,4 +240,9 @@ function remapPluginDataPath(saved: string | undefined, fallback: string, config
     return `${root}${normalized.slice(index)}`;
   }
   return saved;
+}
+
+function clampLaserMs(value: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(value)));
 }

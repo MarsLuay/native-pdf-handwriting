@@ -326,6 +326,9 @@ export default class NativePdfInkPlugin extends Plugin {
       onCompatibilityWarning: (message) => {
         console.warn(`[Handwriting Natively] ${message}`);
         this.vaultDebugLog.write("warn", "compatibility", { message });
+      },
+      onDebugLog: (level, event, payload) => {
+        this.vaultDebugLog.write(level, event, payload ?? {});
       }
     };
   }

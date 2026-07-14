@@ -16,8 +16,8 @@
 - Open every dropdown with mouse, touch, stylus, keyboard.
 - Click outside and Escape close dropdown; focus returns to button.
 - Dropdown fits above/below toolbar at phone, tablet, desktop widths.
-- Pen/Pencil selection, colors, opacity, sizes, previews, stabilization persist.
-- Pencil looks distinct from pen (visible graphite grit via Texture); circular eraser cursor matches size and removes only touched ink.
+- Pen/Pencil/Highlighter selection, colors, opacity, sizes, previews, stabilization persist.
+- Pencil looks distinct from pen (visible graphite grit via Texture); highlighter is wide and translucent; circular eraser cursor matches size and removes only touched ink.
 - One eraser gesture can split a stroke into multiple pieces; undo restores the original stroke and redo restores the erased result.
 - Freeform / rectangle lasso settings persist; only supported actions appear.
 - Undo/redo and selection actions update dirty/save status.

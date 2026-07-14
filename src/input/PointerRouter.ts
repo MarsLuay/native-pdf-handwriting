@@ -1,5 +1,5 @@
 import { setElementCssProps } from "../dom/typeGuards";
-import type { ToolId } from "../model";
+import { isInkDrawTool, type ToolId } from "../model";
 import { scrollPdfBy } from "../integration/PdfScrollRoot";
 import { PalmRejectionPolicy } from "./PalmRejectionPolicy";
 import { PointerCapabilities, type PointerSample } from "./PointerCapabilities";
@@ -89,7 +89,7 @@ export class PointerRouter {
     }
     const editing = tool === "eraser" || tool === "lasso";
     if (event.pointerType === "pen") return editing ? "edit" : "draw";
-    if (event.pointerType === "mouse" && event.button === 0 && (tool === "pen" || tool === "pencil")) return "draw";
+    if (event.pointerType === "mouse" && event.button === 0 && isInkDrawTool(tool)) return "draw";
     if (event.pointerType === "mouse" && event.button === 0 && editing) return "edit";
     return "native";
   }
@@ -169,7 +169,7 @@ export class PointerRouter {
     }
     const tool = this.callbacks.activeTool();
     if (tool !== "eraser") this.hideEraserCursor();
-    if (tool !== "pen" && tool !== "pencil") this.hideDrawCursor();
+    if (!isInkDrawTool(tool)) this.hideDrawCursor();
     this.refreshCursors();
   }
 
@@ -178,7 +178,7 @@ export class PointerRouter {
     const { x, y } = this.lastCursorClient;
     const tool = this.callbacks.activeTool();
     if (tool === "eraser" && !this.eraserCursor.hidden) this.paintEraserCursor(x, y);
-    if ((tool === "pen" || tool === "pencil") && !this.drawCursor.hidden) this.paintDrawCursor(x, y);
+    if (isInkDrawTool(tool) && !this.drawCursor.hidden) this.paintDrawCursor(x, y);
   }
 
   private cursorClientPoint(clientX: number, clientY: number): { x: number; y: number } {
@@ -266,7 +266,7 @@ export class PointerRouter {
   private paintDrawCursor(clientX: number, clientY: number): void {
     const tool = this.callbacks.activeTool();
     const visible = this.callbacks.drawingEnabled()
-      && (tool === "pen" || tool === "pencil");
+      && isInkDrawTool(tool);
     if (!visible) {
       this.hideDrawCursor();
       return;

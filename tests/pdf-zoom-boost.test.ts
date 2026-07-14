@@ -54,9 +54,7 @@ describe("pdf zoom boost", () => {
     viewer.updateScale({ steps: 5 });
     expect(scale).toBeGreaterThan(OBSIDIAN_DEFAULT_MAX_SCALE);
     expect(scale).toBeLessThanOrEqual(BOOSTED_MAX_SCALE);
-
-    expect(boost!.setScale(20)).toBe(true);
-    expect(scale).toBe(20);
+    expect(boost!.maxScale()).toBe(BOOSTED_MAX_SCALE);
 
     boost!.destroy();
     expect(globals.pdfjsViewer!.MAX_SCALE).toBe(OBSIDIAN_DEFAULT_MAX_SCALE);

@@ -1,6 +1,6 @@
 import type { PdfJsViewerLike } from "./PdfViewerCompatibility";
 
-/** Obsidian PDF.js clamps pinch/button zoom at literal 10× in updateScale. */
+/** Obsidian PDF.js clamps pinch/native zoom at literal 10× in updateScale. */
 export const OBSIDIAN_DEFAULT_MAX_SCALE = 10;
 /** Allow denser writing; still below extreme canvas blowups. */
 export const BOOSTED_MAX_SCALE = 25;
@@ -32,9 +32,6 @@ type PdfjsViewerGlobals = {
 };
 
 export interface PdfZoomBoostHandle {
-  setScale(scale: number): boolean;
-  setScaleValue(value: string | number): boolean;
-  zoomBySteps(steps: number): boolean;
   maxScale(): number;
   destroy(): void;
 }
@@ -109,36 +106,7 @@ export function installPdfZoomBoost(
     };
   }
 
-  const setScale = (scale: number): boolean => {
-    const capped = clampPdfScale(scale, maxScale);
-    try {
-      zoomable.currentScale = capped;
-      return true;
-    } catch {
-      return false;
-    }
-  };
-
   return {
-    setScale,
-    setScaleValue(value: string | number): boolean {
-      if (typeof value === "number") return setScale(value);
-      try {
-        zoomable.currentScaleValue = value;
-        return true;
-      } catch {
-        return false;
-      }
-    },
-    zoomBySteps(steps: number): boolean {
-      const before = Number(zoomable.currentScale) || 1;
-      if (originalUpdateScale) {
-        zoomable.updateScale?.({ steps, drawingDelay: 400 });
-        return true;
-      }
-      const desired = computeTargetScale(before, { steps });
-      return desired != null ? setScale(desired) : false;
-    },
     maxScale: () => maxScale,
     destroy(): void {
       if (originalUpdateScale) zoomable.updateScale = originalUpdateScale;
