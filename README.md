@@ -1,5 +1,7 @@
 # Welcome to Handwriting Natively!
 
+![Handwriting Natively drawing toolbar on a Lorem Ipsum PDF](docs/handwriting-natively.png)
+
 ## What Handwriting Natively Does
 
 Handwrite on PDFs with a stylus or mouse natively in obsidian! Annotations live in vault metadata with the original PDFs untouched. Export the copy for the PDF with the added notes.

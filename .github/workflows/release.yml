@@ -20,6 +20,8 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      - name: Validate release version
+        run: node scripts/check-release-version.mjs
       - run: npm test
       - run: npm run build
       - name: Upload release assets

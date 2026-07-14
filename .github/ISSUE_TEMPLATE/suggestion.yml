@@ -1,0 +1,30 @@
+name: Suggestion
+description: Suggest an improvement or new capability for Handwriting Natively
+title: "[Suggestion]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or opportunity
+      description: Describe the need, limitation, or opportunity behind this suggestion.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior or outcome you want.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe other approaches or workarounds you considered.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add examples, mockups, links, or other useful context.
