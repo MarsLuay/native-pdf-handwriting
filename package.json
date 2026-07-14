@@ -1,0 +1,35 @@
+{
+  "name": "obsidian-native-pdf-ink",
+  "version": "0.1.0",
+  "description": "Locally handwrite on PDFs with a stylus or mouse inside Obsidian.",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc --noEmit && node esbuild.config.mjs production",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "smoke": "vitest run tests/integration-adapters-focus.test.ts tests/runtime-viewer-session.test.ts tests/core-storage.test.ts"
+  },
+  "keywords": [
+    "obsidian",
+    "pdf",
+    "handwriting",
+    "annotation"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "pdf-lib": "^1.17.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "esbuild": "^0.28.1",
+    "jsdom": "^29.1.1",
+    "obsidian": "latest",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
+  }
+}
