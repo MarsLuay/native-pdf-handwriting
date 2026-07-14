@@ -281,7 +281,7 @@ export default class NativePdfInkPlugin extends Plugin {
         }
         this.sessions.set(leaf, session);
       } catch (error) {
-        console.warn("[Native PDF Handwriting] PDF view not ready or incompatible", error);
+        console.warn("[Handwriting Natively] PDF view not ready or incompatible", error);
         this.vaultDebugLog.write("warn", "session attach failed", {
           document: file.path,
           error: error instanceof Error ? error.message : String(error)
@@ -324,7 +324,7 @@ export default class NativePdfInkPlugin extends Plugin {
       onPagesChanged: (reason) => getSession()?.onPagesChanged(reason),
       onViewStateChange: (state, source) => getSession()?.onViewStateChange(state, source),
       onCompatibilityWarning: (message) => {
-        console.warn(`[Native PDF Handwriting] ${message}`);
+        console.warn(`[Handwriting Natively] ${message}`);
         this.vaultDebugLog.write("warn", "compatibility", { message });
       }
     };
@@ -369,7 +369,7 @@ export default class NativePdfInkPlugin extends Plugin {
       this.app.workspace.setActiveLeaf(leaf, { focus: true });
       this.vaultDebugLog.write("info", "embed annotate open tab", { document: file.path });
     } catch (error) {
-      console.warn("[Native PDF Handwriting] open PDF tab failed", error);
+      console.warn("[Handwriting Natively] open PDF tab failed", error);
       this.vaultDebugLog.write("warn", "embed annotate open tab failed", {
         document: file.path,
         error: error instanceof Error ? error.message : String(error)

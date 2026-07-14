@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Security fixes are provided for the latest release of Native PDF Handwriting.
+Security fixes are provided for the latest release of Handwriting Natively.
 
 ## Reporting a vulnerability
 

@@ -62,7 +62,7 @@ export interface PluginSettings {
   toolPreferences: ToolPreferences;
 }
 
-export const PLUGIN_ID = "native-pdf-handwriting";
+export const PLUGIN_ID = "handwriting-natively";
 
 /** Build path defaults from Vault#configDir. */
 export function createDefaultSettings(configDir: string): PluginSettings {

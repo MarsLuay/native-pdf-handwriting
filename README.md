@@ -1,6 +1,6 @@
-# Welcome to Native PDF Handwriting!
+# Welcome to Handwriting Natively!
 
-## What Native PDF Handwriting Does
+## What Handwriting Natively Does
 
 Handwrite on PDFs with a stylus or mouse natively in obsidian! Annotations live in vault metadata with the original PDFs untouched. Export the copy for the PDF with the added notes.
 
@@ -17,8 +17,8 @@ I made this plugin after realizing I use Obsidian a lot more than another namele
 ### Quick Start
 
 1. Download the latest [GitHub release](https://github.com/MarsLuay/native-pdf-handwriting/releases) assets (`main.js`, `manifest.json`, `styles.css`).
-2. Copy them into `<Vault>/.obsidian/plugins/native-pdf-handwriting/`.
-3. Reload Obsidian and enable **Native PDF Handwriting** under **Settings → Community plugins**.
+2. Copy them into `<Vault>/.obsidian/plugins/handwriting-natively/`.
+3. Reload Obsidian and enable **Handwriting Natively** under **Settings → Community plugins**.
 4. Open a PDF, turn on **Draw**, and annotate.
 
 ### Manual Setup

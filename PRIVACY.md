@@ -2,11 +2,11 @@
 
 Last updated: July 12, 2026
 
-Native PDF Handwriting works locally inside Obsidian. It does not create an account, send telemetry, use analytics, load remote code, or transmit PDF contents, handwriting, settings, filenames, or usage data to the developer or any hosted service.
+Handwriting Natively works locally inside Obsidian. It does not create an account, send telemetry, use analytics, load remote code, or transmit PDF contents, handwriting, settings, filenames, or usage data to the developer or any hosted service.
 
 ## Information we collect
 
-Native PDF Handwriting and its developer collect no information from your device. The plugin processes the following information locally only: PDF paths and contents, handwriting points, annotation metadata, tool preferences, save status, recovery records, and optional backups. None is sent to the developer.
+Handwriting Natively and its developer collect no information from your device. The plugin processes the following information locally only: PDF paths and contents, handwriting points, annotation metadata, tool preferences, save status, recovery records, and optional backups. None is sent to the developer.
 
 ## How we use your information
 
@@ -21,7 +21,7 @@ The plugin may store:
 - plugin settings and tool preferences;
 - annotated PDF copies you explicitly export.
 
-Default sidecars and recovery data live under `.obsidian/plugins/native-pdf-handwriting/`. Sidecar locations are configurable. Exported PDFs use the location you choose or the source PDF folder.
+Default sidecars and recovery data live under `.obsidian/plugins/handwriting-natively/`. Sidecar locations are configurable. Exported PDFs use the location you choose or the source PDF folder.
 
 ## Original PDFs
 
@@ -42,7 +42,7 @@ Uninstalling the plugin may leave local sidecars and backups so handwriting is n
 
 ## Sharing and recipients
 
-Native PDF Handwriting does not sell or share your information. No developer, advertiser, analytics provider, or other recipient receives it from the plugin. Obsidian Sync, third-party sync tools, operating-system backups, and cloud folders may copy files according to their own policies. Native PDF Handwriting does not control those services.
+Handwriting Natively does not sell or share your information. No developer, advertiser, analytics provider, or other recipient receives it from the plugin. Obsidian Sync, third-party sync tools, operating-system backups, and cloud folders may copy files according to their own policies. Handwriting Natively does not control those services.
 
 ## Security
 
@@ -54,4 +54,4 @@ Material privacy changes will update this document and its date. A future networ
 
 ## Contact support
 
-Contact support by opening an issue in the source repository or issue tracker from which you obtained Native PDF Handwriting. Public releases must publish that concrete repository URL before distribution. Security reports should follow `SECURITY.md` when published.
+Contact support by opening an issue in the source repository or issue tracker from which you obtained Handwriting Natively. Public releases must publish that concrete repository URL before distribution. Security reports should follow `SECURITY.md` when published.

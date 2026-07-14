@@ -18,7 +18,7 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
     containerEl.empty();
 
     containerEl.createEl("p", {
-      text: "Locally handwrite on PDFs with a stylus or mouse."
+      text: "PDF handwriting. Use your apple pencil/stylus to write in PDFs natively as the higher powers intended."
     });
 
     new Setting(containerEl)
@@ -107,7 +107,7 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName("Developer").setHeading();
     new Setting(containerEl)
       .setName("Vault debug log")
-      .setDesc("Append every Native PDF Handwriting event to a vault NDJSON log file so agents can read it directly. Off by default.")
+      .setDesc("Append every Handwriting Natively event to a vault NDJSON log file so agents can read it directly. Off by default.")
       .addToggle((toggle) =>
         toggle.setValue(this.host.settings.vaultDebugLog).onChange(async (value) => {
           await this.persistPatch({ vaultDebugLog: value });
@@ -125,14 +125,14 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Copy all settings")
-      .setDesc("Copy every Native PDF Handwriting setting as readable JSON.")
+      .setDesc("Copy every Handwriting Natively setting as readable JSON.")
       .addButton((button) =>
         button.setButtonText("Copy all").onClick(async () => {
           try {
             await navigator.clipboard.writeText(serializePluginSettings(this.host.settings));
-            new Notice("All Native PDF Handwriting settings copied.");
+            new Notice("All Handwriting Natively settings copied.");
           } catch (error) {
-            console.error("Native PDF Handwriting could not copy settings", error);
+            console.error("Handwriting Natively could not copy settings", error);
             new Notice("Could not copy settings. Check clipboard permission and try again.");
           }
         })

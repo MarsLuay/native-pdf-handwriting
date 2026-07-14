@@ -63,7 +63,7 @@ export class VaultDebugLog implements VaultLogSink {
       if (await vault.adapter.exists(filePath)) await vault.adapter.append(filePath, chunk);
       else await vault.adapter.write(filePath, chunk);
     } catch (error) {
-      console.error("[Native PDF Handwriting] vault debug log write failed", error);
+      console.error("[Handwriting Natively] vault debug log write failed", error);
     } finally {
       this.flushing = false;
       if (this.buffer.length) this.scheduleFlush();
