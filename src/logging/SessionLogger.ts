@@ -325,7 +325,7 @@ export class SessionLogger {
   }
 
   private emit(level: "info" | "warn", event: string, payload: Record<string, unknown>): void {
-    if (level === "info") console.info(PREFIX, event, payload);
+    if (level === "info") console.debug(PREFIX, event, payload);
     else console.warn(PREFIX, event, payload);
     this.vaultLog?.write(level, event, payload);
   }

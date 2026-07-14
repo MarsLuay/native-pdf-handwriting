@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.5 — 2026-07-14
+
+- Restore the immutable plugin ID `native-pdf-handwriting` while keeping the Handwriting Natively display name and repository branding.
+- Add analyzer coverage that rejects plugin ID changes after the first catalog-valid release.
+
 ## 0.1.4 — 2026-07-14
 
 - Rename the plugin to Handwriting Natively and change its ID to `handwriting-natively`.

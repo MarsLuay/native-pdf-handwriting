@@ -21,7 +21,7 @@ The plugin may store:
 - plugin settings and tool preferences;
 - annotated PDF copies you explicitly export.
 
-Default sidecars and recovery data live under `.obsidian/plugins/handwriting-natively/`. Sidecar locations are configurable. Exported PDFs use the location you choose or the source PDF folder.
+Default sidecars and recovery data live under `.obsidian/plugins/native-pdf-handwriting/`. Sidecar locations are configurable. Exported PDFs use the location you choose or the source PDF folder.
 
 ## Original PDFs
 

@@ -1,12 +1,13 @@
 {
   "name": "handwriting-natively",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "PDF handwriting. Use your apple pencil/stylus to write in PDFs natively as the higher powers intended.",
   "main": "main.js",
   "type": "module",
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc --noEmit && node esbuild.config.mjs production",
+    "lint": "eslint \"src/**/*.{ts,tsx}\" --max-warnings=0",
     "test": "vitest run",
     "test:watch": "vitest",
     "smoke": "vitest run tests/integration-adapters-focus.test.ts tests/runtime-viewer-session.test.ts tests/core-storage.test.ts"
@@ -22,11 +23,17 @@
     "pdf-lib": "^1.17.1"
   },
   "devDependencies": {
+    "@eslint/js": "^9.30.1",
+    "@eslint/json": "^0.14.0",
     "@types/node": "^26.1.1",
     "esbuild": "^0.28.1",
+    "eslint": "^9.30.1",
+    "eslint-plugin-obsidianmd": "^0.3.0",
+    "jiti": "^2.7.0",
     "jsdom": "^29.1.1",
     "obsidian": "latest",
-    "typescript": "^7.0.2",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.62.0",
     "vitest": "^4.1.10"
   },
   "allowScripts": {

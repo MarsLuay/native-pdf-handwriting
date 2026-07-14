@@ -19,7 +19,7 @@ I made this plugin after realizing I use Obsidian a lot more than another namele
 ### Quick Start
 
 1. Download the latest [GitHub release](https://github.com/MarsLuay/handwriting-natively/releases) assets (`main.js`, `manifest.json`, `styles.css`).
-2. Copy them into `<Vault>/.obsidian/plugins/handwriting-natively/`.
+2. Copy them into `<Vault>/.obsidian/plugins/native-pdf-handwriting/`.
 3. Reload Obsidian and enable **Handwriting Natively** under **Settings → Community plugins**.
 4. Open a PDF, turn on **Draw**, and annotate.
 

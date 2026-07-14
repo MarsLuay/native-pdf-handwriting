@@ -3,23 +3,23 @@ import { SessionLogger } from "../src/logging/SessionLogger";
 
 describe("SessionLogger", () => {
   it("logs zoom in and zoom out with scale deltas", () => {
-    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
     const logger = new SessionLogger("Notes/example.pdf");
 
     logger.viewState({ pageNumber: 1, scrollFraction: 0, scale: 1, rotation: 0 }, "scalechanging");
     logger.viewState({ pageNumber: 1, scrollFraction: 0, scale: 1.25, rotation: 0 }, "scalechanging");
     logger.viewState({ pageNumber: 1, scrollFraction: 0, scale: 1, rotation: 0 }, "data-scale");
 
-    expect(info).toHaveBeenCalledTimes(3);
-    expect(info.mock.calls[0]?.[1]).toBe("pdf zoom");
-    expect(info.mock.calls[0]?.[2]).toMatchObject({ action: "view-change", source: "scalechanging", scale: 1 });
-    expect(info.mock.calls[1]?.[2]).toMatchObject({ action: "zoom-in", previousScale: 1, scale: 1.25 });
-    expect(info.mock.calls[2]?.[2]).toMatchObject({ action: "zoom-out", previousScale: 1.25, scale: 1, source: "data-scale" });
-    info.mockRestore();
+    expect(debug).toHaveBeenCalledTimes(3);
+    expect(debug.mock.calls[0]?.[1]).toBe("pdf zoom");
+    expect(debug.mock.calls[0]?.[2]).toMatchObject({ action: "view-change", source: "scalechanging", scale: 1 });
+    expect(debug.mock.calls[1]?.[2]).toMatchObject({ action: "zoom-in", previousScale: 1, scale: 1.25 });
+    expect(debug.mock.calls[2]?.[2]).toMatchObject({ action: "zoom-out", previousScale: 1.25, scale: 1, source: "data-scale" });
+    debug.mockRestore();
   });
 
   it("logs draw positions with bounds", () => {
-    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
     const logger = new SessionLogger("Notes/example.pdf");
 
     logger.draw({
@@ -30,19 +30,19 @@ describe("SessionLogger", () => {
       points: [{ x: 10, y: 20 }, { x: 30, y: 40 }]
     });
 
-    expect(info).toHaveBeenCalledOnce();
-    expect(info.mock.calls[0]?.[1]).toBe("draw position");
-    expect(info.mock.calls[0]?.[2]).toMatchObject({
+    expect(debug).toHaveBeenCalledOnce();
+    expect(debug.mock.calls[0]?.[1]).toBe("draw position");
+    expect(debug.mock.calls[0]?.[2]).toMatchObject({
       phase: "end",
       page: 1,
       pointCount: 2,
       bounds: { minX: 10, minY: 20, maxX: 30, maxY: 40 }
     });
-    info.mockRestore();
+    debug.mockRestore();
   });
 
   it("logs zoom tick deferral and repaint timing", () => {
-    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
     const logger = new SessionLogger("Notes/example.pdf");
 
     logger.zoomTick({ reason: "view-scalechanging", tick: 1, scale: 1 });
@@ -61,9 +61,9 @@ describe("SessionLogger", () => {
       scale: 1.1
     });
 
-    expect(info.mock.calls.some((call) => call[1] === "ink zoom tick")).toBe(true);
-    expect(info.mock.calls.some((call) => call[1] === "ink zoom repaint")).toBe(true);
-    const repaint = info.mock.calls.find((call) => call[1] === "ink zoom repaint");
+    expect(debug.mock.calls.some((call) => call[1] === "ink zoom tick")).toBe(true);
+    expect(debug.mock.calls.some((call) => call[1] === "ink zoom repaint")).toBe(true);
+    const repaint = debug.mock.calls.find((call) => call[1] === "ink zoom repaint");
     expect(repaint?.[2]).toMatchObject({
       burstTicks: 2,
       pagesRepainted: 2,
@@ -71,11 +71,11 @@ describe("SessionLogger", () => {
       strokesRedrawn: 18,
       repaintsPerSec: expect.any(Number)
     });
-    info.mockRestore();
+    debug.mockRestore();
   });
 
   it("logs refresh bursts and lasso selection", () => {
-    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const logger = new SessionLogger("Notes/example.pdf");
 
@@ -83,11 +83,11 @@ describe("SessionLogger", () => {
     logger.lassoSelection(1, 3, 48, "freeform");
     logger.loopBlocked("refresh", 4);
 
-    expect(info.mock.calls.some((call) => call[1] === "session refresh")).toBe(true);
-    expect(info.mock.calls.some((call) => call[1] === "lasso selection")).toBe(true);
+    expect(debug.mock.calls.some((call) => call[1] === "session refresh")).toBe(true);
+    expect(debug.mock.calls.some((call) => call[1] === "lasso selection")).toBe(true);
     expect(warn.mock.calls.some((call) => call[1] === "refresh storm")).toBe(true);
     expect(warn.mock.calls.some((call) => call[1] === "loop blocked")).toBe(true);
-    info.mockRestore();
+    debug.mockRestore();
     warn.mockRestore();
   });
 
@@ -109,7 +109,7 @@ describe("SessionLogger", () => {
   });
 
   it("logs every pointer route and raw pointer seen types", () => {
-    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
     const logger = new SessionLogger("Notes/example.pdf");
 
     logger.pointerRoute("touch-pan", { pointerType: "touch", page: 1 });
@@ -117,8 +117,8 @@ describe("SessionLogger", () => {
     logger.pointerSeen({ source: "pointerdown", pointerType: "pen", within: true });
     logger.pointerSeen({ source: "touchstart", pointerType: "touch", within: true });
 
-    expect(info.mock.calls.some((call) => call[1] === "pointer route" && (call[2] as { route: string }).route === "touch-pan")).toBe(true);
-    expect(info.mock.calls.some((call) => call[1] === "pointer seen" && (call[2] as { pointerType: string }).pointerType === "touch")).toBe(true);
-    info.mockRestore();
+    expect(debug.mock.calls.some((call) => call[1] === "pointer route" && (call[2] as { route: string }).route === "touch-pan")).toBe(true);
+    expect(debug.mock.calls.some((call) => call[1] === "pointer seen" && (call[2] as { pointerType: string }).pointerType === "touch")).toBe(true);
+    debug.mockRestore();
   });
 });

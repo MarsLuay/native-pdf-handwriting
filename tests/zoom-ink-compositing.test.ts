@@ -249,8 +249,8 @@ function paintStampCalls(context: CanvasSpy): number {
   return context.arc.mock.calls.length + context.stroke.mock.calls.length + context.fill.mock.calls.length;
 }
 
-function infoCalls(event: string): unknown[][] {
-  return (console.info as ReturnType<typeof vi.fn>).mock.calls.filter((call) => call[1] === event);
+function debugCalls(event: string): unknown[][] {
+  return (console.debug as ReturnType<typeof vi.fn>).mock.calls.filter((call) => call[1] === event);
 }
 
 describe("zoom ink compositing", () => {
@@ -259,7 +259,7 @@ describe("zoom ink compositing", () => {
   beforeEach(() => {
     context = mockCanvas2d();
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context as unknown as CanvasRenderingContext2D);
-    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.spyOn(console, "debug").mockImplementation(() => undefined);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
   });
 
@@ -291,10 +291,10 @@ describe("zoom ink compositing", () => {
     expect(overlay.classList.contains("native-pdf-handwriting-zoom-compositing")).toBe(true);
     expect(paintStampCalls(context)).toBe(stampsBeforeBurst);
 
-    const zoomTicks = infoCalls("ink zoom tick");
+    const zoomTicks = debugCalls("ink zoom tick");
     expect(zoomTicks.length).toBeGreaterThanOrEqual(2);
     expect(zoomTicks.every((call) => (call[2] as { deferred?: boolean }).deferred === true)).toBe(true);
-    expect(infoCalls("ink zoom repaint")).toHaveLength(0);
+    expect(debugCalls("ink zoom repaint")).toHaveLength(0);
 
     await vi.advanceTimersByTimeAsync(120);
 
@@ -303,7 +303,7 @@ describe("zoom ink compositing", () => {
     expect(paintStampCalls(context)).toBe(stampsBeforeBurst);
     expect(context.drawImage).toHaveBeenCalled();
 
-    const repaints = infoCalls("ink zoom repaint");
+    const repaints = debugCalls("ink zoom repaint");
     expect(repaints.length).toBeGreaterThanOrEqual(1);
     expect(repaints.at(-1)?.[2]).toMatchObject({
       reason: expect.stringContaining("scalechanging"),
@@ -380,11 +380,11 @@ describe("zoom ink compositing", () => {
     expect(surface.inkLayer!.width).toBe(surface.canvas.width);
     expect(surface.inkLayerValid).toBe(true);
     expect(context.drawImage).toHaveBeenCalled();
-    expect(infoCalls("ink zoom repaint").at(-1)?.[2]).toMatchObject({ canvasesResized: 1, strokesRedrawn: 0 });
+    expect(debugCalls("ink zoom repaint").at(-1)?.[2]).toMatchObject({ canvasesResized: 1, strokesRedrawn: 0 });
 
     // Deferred HQ upgrade after settle.
     await vi.advanceTimersByTimeAsync(280);
-    expect(infoCalls("ink zoom repaint").length).toBeGreaterThanOrEqual(1);
+    expect(debugCalls("ink zoom repaint").length).toBeGreaterThanOrEqual(1);
 
     context.drawImage.mockClear();
     adapter.pageElement.dispatchEvent(pointer("pointerdown", 200, 220));
@@ -451,7 +451,7 @@ describe("zoom ink compositing", () => {
     session.onViewStateChange(adapter.getViewState(), "data-scale");
 
     expect(overlay.classList.contains("native-pdf-handwriting-zoom-compositing")).toBe(true);
-    expect(infoCalls("ink zoom tick").length).toBeGreaterThanOrEqual(1);
+    expect(debugCalls("ink zoom tick").length).toBeGreaterThanOrEqual(1);
 
     await vi.advanceTimersByTimeAsync(120);
     expect(overlay.classList.contains("native-pdf-handwriting-zoom-compositing")).toBe(false);
