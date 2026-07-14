@@ -18,8 +18,7 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
     containerEl.empty();
 
     containerEl.createEl("p", {
-      // eslint-disable-next-line obsidianmd/ui/sentence-case -- Preserve the PDF acronym and Apple Pencil brand name.
-      text: "PDF handwriting. Use your Apple Pencil/stylus to write in PDFs natively as the higher powers intended."
+      text: "PDF handwriting for a stylus or mouse. Write directly in the document view while keeping the original file untouched."
     });
 
     new Setting(containerEl)
@@ -62,8 +61,7 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
 
     new Setting(containerEl).setName("PDF navigation").setHeading();
     new Setting(containerEl)
-      // eslint-disable-next-line obsidianmd/ui/sentence-case -- Draw is the exact toolbar control name.
-      .setName("Drag to scroll when Draw is off")
+      .setName("Drag to scroll when draw mode is off")
       .setDesc("Vertical mouse drag on empty PDF areas scrolls the document. Text selection and links still work normally.")
       .addToggle((toggle) =>
         toggle.setValue(this.host.settings.mouseDragScroll).onChange(async (value) => {
@@ -109,8 +107,7 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName("Developer").setHeading();
     new Setting(containerEl)
       .setName("Vault debug log")
-      // eslint-disable-next-line obsidianmd/ui/sentence-case -- Preserve the plugin name and NDJSON acronym.
-      .setDesc("Append every Handwriting Natively event to a vault NDJSON log file so agents can read it directly. Off by default.")
+      .setDesc("Append every plugin event to a line-delimited log file in the vault so agents can read it directly. Off by default.")
       .addToggle((toggle) =>
         toggle.setValue(this.host.settings.vaultDebugLog).onChange(async (value) => {
           await this.persistPatch({ vaultDebugLog: value });
@@ -128,14 +125,12 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Copy all settings")
-      // eslint-disable-next-line obsidianmd/ui/sentence-case -- Preserve the Handwriting Natively plugin name.
-      .setDesc("Copy every Handwriting Natively setting as readable JSON.")
+      .setDesc("Copy every plugin setting in a structured, readable format.")
       .addButton((button) =>
         button.setButtonText("Copy all").onClick(async () => {
           try {
             await navigator.clipboard.writeText(serializePluginSettings(this.host.settings));
-            // eslint-disable-next-line obsidianmd/ui/sentence-case -- Preserve the Handwriting Natively plugin name.
-            new Notice("All Handwriting Natively settings copied.");
+            new Notice("All plugin settings copied.");
           } catch (error) {
             console.error("Handwriting Natively could not copy settings", error);
             new Notice("Could not copy settings. Check clipboard permission and try again.");
@@ -155,8 +150,7 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
     });
     supportLinks.createEl("a", {
       cls: "native-pdf-handwriting-support-link",
-      // eslint-disable-next-line obsidianmd/ui/sentence-case -- Buy Me a Coffee is a brand name.
-      text: "Buy Me a Coffee",
+      text: "Buy me a coffee",
       attr: {
         href: "https://buymeacoffee.com/marwanluaye",
         rel: "noopener noreferrer",

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.6 — 2026-07-14
+
+- Replace forbidden sentence-case lint suppressions with marketplace-compliant settings copy.
+
 ## 0.1.5 — 2026-07-14
 
 - Restore the immutable plugin ID `native-pdf-handwriting` while keeping the Handwriting Natively display name and repository branding.
