@@ -14,7 +14,7 @@ Locally handwrite on PDFs with a stylus or mouse inside Obsidian. Annotations li
 ### Quick Start
 
 1. Download the latest [GitHub release](https://github.com/MarsLuay/obsidian-native-pdf-ink/releases) assets (`main.js`, `manifest.json`, `styles.css`).
-2. Copy them into `<Vault>/.obsidian/plugins/obsidian-native-pdf-ink/`.
+2. Copy them into `<Vault>/.obsidian/plugins/native-pdf-ink/`.
 3. Reload Obsidian and enable **Native PDF Ink** under **Settings → Community plugins**.
 4. Open a PDF, turn on **Draw**, and annotate.
 

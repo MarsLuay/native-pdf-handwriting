@@ -1,9 +1,9 @@
 {
-  "id": "obsidian-native-pdf-ink",
+  "id": "native-pdf-ink",
   "name": "Native PDF Ink",
   "version": "0.1.0",
   "minAppVersion": "1.5.0",
-  "description": "Locally handwrite on PDFs with a stylus or mouse inside Obsidian.",
+  "description": "Locally handwrite on PDFs with a stylus or mouse.",
   "author": "Mars",
   "isDesktopOnly": false
 }

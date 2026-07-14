@@ -28,7 +28,7 @@ describe("safe defaults", () => {
   it("keeps vault debug log off by default", () => {
     expect(DEFAULT_SETTINGS.vaultDebugLog).toBe(false);
     expect(DEFAULT_SETTINGS.vaultDebugLogPath).toBe(
-      ".obsidian/plugins/obsidian-native-pdf-ink/debug.log"
+      ".obsidian/plugins/native-pdf-ink/debug.log"
     );
   });
 
