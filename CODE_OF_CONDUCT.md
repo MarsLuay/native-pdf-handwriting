@@ -2,7 +2,7 @@
 
 ## Our pledge
 
-We pledge to make participation in Native PDF Handwriting a harassment-free experience for everyone.
+We pledge to make participation in Handwriting Natively a harassment-free experience for everyone.
 
 ## Our standards
 

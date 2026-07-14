@@ -1,9 +1,9 @@
 {
-  "id": "native-pdf-handwriting",
-  "name": "Native PDF Handwriting",
-  "version": "0.1.3",
+  "id": "handwriting-natively",
+  "name": "Handwriting Natively",
+  "version": "0.1.4",
   "minAppVersion": "1.13.0",
-  "description": "Locally handwrite on PDFs with a stylus or mouse.",
+  "description": "PDF handwriting. Use your apple pencil/stylus to write in PDFs natively as the higher powers intended.",
   "author": "Mars",
   "isDesktopOnly": false
 }

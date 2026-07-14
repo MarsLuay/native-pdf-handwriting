@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.4 — 2026-07-14
+
+- Rename the plugin to Handwriting Natively and change its ID to `handwriting-natively`.
+- Refresh the Community plugin description.
+
 ## 0.1.3 — 2026-07-13
 
 - Refresh README intro copy for Community listing.

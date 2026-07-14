@@ -2,7 +2,7 @@
 
 Last updated: July 12, 2026
 
-These terms apply to Native PDF Handwriting, a local Obsidian plugin. Installing or using it means you accept these terms and the MIT license in `LICENSE`.
+These terms apply to Handwriting Natively, a local Obsidian plugin. Installing or using it means you accept these terms and the MIT license in `LICENSE`.
 
 ## Permitted use and prohibited use
 
@@ -10,7 +10,7 @@ You may use, study, modify, and distribute the software under the MIT license. D
 
 ## Accounts, suspension, and termination
 
-Native PDF Handwriting provides no account or hosted service. There is no account to suspend. You may terminate use at any time by disabling or uninstalling the plugin. Local sidecars, exports, and backups may remain until you delete them.
+Handwriting Natively provides no account or hosted service. There is no account to suspend. You may terminate use at any time by disabling or uninstalling the plugin. Local sidecars, exports, and backups may remain until you delete them.
 
 ## Ownership
 
@@ -42,4 +42,4 @@ Governing law and jurisdiction depend on the maintainer or distributor offering 
 
 ## Changes and contact
 
-Material changes will update this document and its date. Contact support through the source repository or issue tracker from which you obtained Native PDF Handwriting.
+Material changes will update this document and its date. Contact support through the source repository or issue tracker from which you obtained Handwriting Natively.

@@ -2,7 +2,7 @@
 
 ## Scope and evidence
 
-This analysis uses ten local, read-only, depth-1 clones under `Inspiration/`. Paths below are primary-source citations into those clones. “Verified” statements describe the inspected commit; “Adopt” and “Do not adopt” are design inferences for Native PDF Handwriting. Obsidian PDF internals are undocumented and must be runtime-guarded even when PDF++ currently types them.
+This analysis uses ten local, read-only, depth-1 clones under `Inspiration/`. Paths below are primary-source citations into those clones. “Verified” statements describe the inspected commit; “Adopt” and “Do not adopt” are design inferences for Handwriting Natively. Obsidian PDF internals are undocumented and must be runtime-guarded even when PDF++ currently types them.
 
 No source code has been copied or adapted from any inspiration repository. Direct code reuse: **none**. If that changes, record the exact source range, commit, modifications, copyright notice, and license obligations here before merging it.
 
@@ -51,9 +51,9 @@ Outline and search are already reachable. `Inspiration/obsidian-pdf-plus/src/lib
 
 Mobile is not equivalent to desktop. PDF++ disables some text-layer copy processing on `Platform.isMobile`, avoids hover toolbar behavior on `Platform.isPhone`, uses mobile-specific copy handling, and applies embed-specific page-width/sidebar workarounds in `src/patchers/pdf-internals.ts` and `src/toolbar.ts`. These branches are evidence that behavior and DOM timing must be tested on Obsidian Mobile, not inferred from desktop.
 
-Cleanup is deliberately reversible. Every prototype patch is passed to `plugin.register(around(...))`; event listeners are attached through a child `Component`; PDF.js event-bus listeners register a matching `off`; toolbar-created elements register removal callbacks (`src/patchers/pdf-internals.ts`, `src/lib/index.ts`, `src/toolbar.ts`). PDF++ sometimes reloads viewer components after patching, which is useful evidence but too disruptive to make Native PDF Handwriting’s normal mounting strategy.
+Cleanup is deliberately reversible. Every prototype patch is passed to `plugin.register(around(...))`; event listeners are attached through a child `Component`; PDF.js event-bus listeners register a matching `off`; toolbar-created elements register removal callbacks (`src/patchers/pdf-internals.ts`, `src/lib/index.ts`, `src/toolbar.ts`). PDF++ sometimes reloads viewer components after patching, which is useful evidence but too disruptive to make Handwriting Natively’s normal mounting strategy.
 
-### Design inference for Native PDF Handwriting
+### Design inference for Handwriting Natively
 
 Adopt a narrow `ObsidianPdfAdapter` that returns a capability-checked session rather than leaking the graph. Validate every edge independently: component readiness; child; viewer DOM; PDF.js viewer; event bus; page view/viewport; toolbar; find bar; sidebar. Record the detected Obsidian version and failed edge for compatibility diagnostics. Prefer event and DOM observation over prototype patches; patch only where no instance-level seam exists.
 
@@ -63,7 +63,7 @@ For embeds, discover `PDFEmbed` instances through component ownership, not globa
 
 Reuse native outline and search capabilities when present: toggle `pdfSidebar`, and expose/focus the existing `findBar` or dispatch through it. Do not fork outline extraction or text search. If those internals are absent, hide the capability with a compatibility notice rather than silently substituting incompatible behavior.
 
-Mount a Native PDF Handwriting toolbar container into `toolbarLeftEl` only after structural checks. On narrow/mobile layouts, mount the same toolbar model in a plugin-owned, viewport-safe host instead of depending on desktop toolbar siblings. Popovers belong to that session host and must stop dismissal propagation without globally swallowing PDF pointer input.
+Mount a Handwriting Natively toolbar container into `toolbarLeftEl` only after structural checks. On narrow/mobile layouts, mount the same toolbar model in a plugin-owned, viewport-safe host instead of depending on desktop toolbar siblings. Popovers belong to that session host and must stop dismissal propagation without globally swallowing PDF pointer input.
 
 Each session needs one disposal stack: PDF.js `off` callbacks, DOM listeners/`AbortController`, observers, injected nodes, popovers, pending timers, pointer captures, references, and optional monkey-patch uninstallers. Close order is: stop accepting edits; finish/cancel the active gesture; flush or resolve unsaved changes; release capture; dispose UI/listeners; drop viewer references. Plugin unload must await all save queues before session disposal completes.
 
@@ -91,7 +91,7 @@ Each session needs one disposal stack: PDF.js `off` callbacks, DOM listeners/`Ab
 
 **Adopt.** Use explicit dirty/saving/autosaving state, suppress save work during an active gesture, flush on leaf/view lifecycle transitions, and test mobile drawers/popout documents as separate DOM environments.
 
-**Do not adopt.** Do not copy AGPL code or import the whole Excalidraw lifecycle. Avoid polling autosave as the primary trigger; Native PDF Handwriting should debounce completed commands and serialize writes, with lifecycle flush as a backstop.
+**Do not adopt.** Do not copy AGPL code or import the whole Excalidraw lifecycle. Avoid polling autosave as the primary trigger; Handwriting Natively should debounce completed commands and serialize writes, with lifecycle flush as a backstop.
 
 ### `perfect-freehand`
 

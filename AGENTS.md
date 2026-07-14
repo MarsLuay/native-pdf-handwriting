@@ -1,4 +1,4 @@
-# Native PDF Handwriting agent rules
+# Handwriting Natively agent rules
 
 - Keep `Inspiration/` read-only.
 - Keep undocumented Obsidian PDF access inside `src/integration/`.
