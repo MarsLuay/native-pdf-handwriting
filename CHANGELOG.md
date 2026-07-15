@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.8 — 2026-07-14
+
+- Hide the native PDF cursor during ink/eraser with high-specificity selectors instead of `!important` (Stylelint / Obsidian css-important).
+
 ## 0.1.7 — 2026-07-14
 
 - Add an Excalidraw-style laser pointer: freehand trails that hold briefly, then fade and erase little-by-little. Never saved to the sidecar.

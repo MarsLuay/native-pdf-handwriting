@@ -355,18 +355,31 @@
   transform: none;
   width: 100%;
 }
-/* Beat PDF.js / PDF++ text-layer `cursor: text` while our custom ink cursor is up. */
+/* Beat PDF.js / PDF++ text-layer `cursor: text` while our custom ink cursor is up.
+ * Prefer high-specificity selectors over !important (Obsidian baseline / Stylelint). */
 .native-pdf-handwriting-hide-native-cursor,
 .native-pdf-handwriting-hide-native-cursor .pdfViewer,
+.native-pdf-handwriting-hide-native-cursor .pdfViewer .page,
+.native-pdf-handwriting-hide-native-cursor .pdfViewer .page .textLayer,
+.native-pdf-handwriting-hide-native-cursor .pdfViewer .page .textLayer *,
+.native-pdf-handwriting-hide-native-cursor .pdfViewer .page .annotationLayer,
+.native-pdf-handwriting-hide-native-cursor .pdfViewer .page .annotationLayer *,
+.native-pdf-handwriting-hide-native-cursor .pdfViewer .page canvas,
 .native-pdf-handwriting-hide-native-cursor .page,
-.native-pdf-handwriting-hide-native-cursor .page *,
-.native-pdf-handwriting-hide-native-cursor canvas,
+.native-pdf-handwriting-hide-native-cursor .page .textLayer,
+.native-pdf-handwriting-hide-native-cursor .page .textLayer *,
+.native-pdf-handwriting-hide-native-cursor .page .annotationLayer,
+.native-pdf-handwriting-hide-native-cursor .page .annotationLayer *,
+.native-pdf-handwriting-hide-native-cursor .page canvas,
 .native-pdf-handwriting-has-eraser-cursor,
-.native-pdf-handwriting-has-eraser-cursor *,
+.native-pdf-handwriting-has-eraser-cursor .page,
+.native-pdf-handwriting-has-eraser-cursor .page .textLayer,
+.native-pdf-handwriting-has-eraser-cursor .page .textLayer *,
 .native-pdf-handwriting-has-draw-cursor,
-.native-pdf-handwriting-has-draw-cursor * {
-  /* obsidian: allow css-important -- required third-party inline-style override */
-  cursor: none !important;
+.native-pdf-handwriting-has-draw-cursor .page,
+.native-pdf-handwriting-has-draw-cursor .page .textLayer,
+.native-pdf-handwriting-has-draw-cursor .page .textLayer * {
+  cursor: none;
 }
 /* Keep toolbar / chrome clickable cursors usable if nested under the viewer root. */
 .native-pdf-handwriting-hide-native-cursor .native-pdf-handwriting-toolbar,
@@ -375,14 +388,12 @@
 .native-pdf-handwriting-hide-native-cursor .native-pdf-handwriting-chrome *,
 .native-pdf-handwriting-hide-native-cursor .native-pdf-handwriting-selection-toolbar,
 .native-pdf-handwriting-hide-native-cursor .native-pdf-handwriting-selection-toolbar * {
-  /* obsidian: allow css-important -- required third-party inline-style override */
-  cursor: auto !important;
+  cursor: auto;
 }
 .native-pdf-handwriting-hide-native-cursor .native-pdf-handwriting-toolbar button,
 .native-pdf-handwriting-hide-native-cursor .native-pdf-handwriting-toolbar .clickable-icon,
 .native-pdf-handwriting-hide-native-cursor .native-pdf-handwriting-selection-toolbar button {
-  /* obsidian: allow css-important -- required third-party inline-style override */
-  cursor: pointer !important;
+  cursor: pointer;
 }
 .native-pdf-handwriting-panning { cursor: grabbing; }
 .native-pdf-handwriting-panning * { cursor: grabbing; }
