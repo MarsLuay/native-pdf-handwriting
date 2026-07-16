@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { InkStroke, PdfPoint } from "../src/model";
-import { eraseStrokeSegments, eraseStrokes } from "../src/tools/EraserTool";
+import { eraseStrokeSegments, eraseStrokes, eraseWholeStrokes } from "../src/tools/EraserTool";
 
 const point = (x: number, y: number, pressure = 0.5, time = x): PdfPoint => ({ x, y, pressure, time });
 const stroke = (id: string, points: PdfPoint[], width = 2): InkStroke => ({
@@ -52,6 +52,15 @@ describe("circular segment eraser", () => {
     const result = eraseStrokeSegments([untouched, covered], [point(5, 0)], 2);
     expect(result.kept).toEqual([untouched]);
     expect(result.erased).toEqual([covered]);
+    expect(result.fragments).toEqual([]);
+  });
+
+  it("removes a touched stroke as a whole when whole-stroke mode is selected", () => {
+    const touched = stroke("line", [point(0, 0), point(10, 0)]);
+    const untouched = stroke("far", [point(0, 20), point(10, 20)]);
+    const result = eraseWholeStrokes([touched, untouched], [point(5, 0)], 2);
+    expect(result.erased).toEqual([touched]);
+    expect(result.kept).toEqual([untouched]);
     expect(result.fragments).toEqual([]);
   });
 

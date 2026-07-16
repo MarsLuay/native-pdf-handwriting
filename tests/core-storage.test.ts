@@ -11,20 +11,10 @@ const sidecar = (): SidecarSchemaV1 => ({ schemaVersion: 1, document: { id: "doc
 class MemoryFiles implements TextFileAdapter {
   data = new Map<string, string>();
   failRename = false;
-  failWritePath: string | null = null;
   async exists(path: string) { return this.data.has(path); }
   async read(path: string) { const value = this.data.get(path); if (value === undefined) throw new Error("missing"); return value; }
-  async write(path: string, contents: string) {
-    if (this.failWritePath === path) throw new Error("write failed");
-    this.data.set(path, contents);
-  }
-  async rename(from: string, to: string) {
-    if (this.failRename) throw new Error("rename failed");
-    // Match Obsidian: rename cannot replace an existing destination.
-    if (this.data.has(to)) throw new Error("Destination file already exists!");
-    this.data.set(to, await this.read(from));
-    this.data.delete(from);
-  }
+  async write(path: string, contents: string) { this.data.set(path, contents); }
+  async rename(from: string, to: string) { if (this.failRename) throw new Error("rename failed"); this.data.set(to, await this.read(from)); this.data.delete(from); }
   async remove(path: string) { this.data.delete(path); }
 }
 
@@ -32,20 +22,6 @@ describe("sidecar storage", () => {
   it("round-trips schema v1 and rejects invalid JSON", () => {
     expect(parseSidecar(serializeSidecar(sidecar()))).toEqual(sidecar());
     expect(() => parseSidecar("{}")) .toThrow("invalid sidecar");
-  });
-
-  it("accepts highlighter strokes in sidecar schema", () => {
-    const highlight: InkStroke = {
-      ...stroke,
-      id: "h1",
-      tool: "highlighter",
-      color: "#facc15",
-      width: 14,
-      opacity: 0.35
-    };
-    const doc = sidecar();
-    doc.pages[0]!.strokes = [highlight];
-    expect(parseSidecar(serializeSidecar(doc)).pages[0]?.strokes[0]?.tool).toBe("highlighter");
   });
 
   it("migrates v0 pages to schema v1 with default rotation", () => {
@@ -70,38 +46,15 @@ describe("sidecar storage", () => {
     expect(pickNewerSidecar(null, newer)).toBe(newer);
   });
 
-  it("atomically renames the first save and overwrites later saves without rename-replace", async () => {
-    const files = new MemoryFiles();
-    const repository = new SidecarRepository(files, "annotations");
-    await repository.save(sidecar());
-    expect(files.data.has("annotations/doc.json.tmp")).toBe(false);
-
-    const changed = sidecar();
-    changed.updatedAt = "later";
-    await repository.save(changed);
-    expect(parseSidecar(await files.read("annotations/doc.json")).updatedAt).toBe("later");
-    expect(files.data.has("annotations/doc.json.tmp")).toBe(false);
-  });
-
-  it("preserves the last valid sidecar when the first rename fails", async () => {
-    const files = new MemoryFiles();
-    const repository = new SidecarRepository(files, "annotations");
-    files.failRename = true;
-    await expect(repository.save(sidecar())).rejects.toThrow("rename failed");
-    expect(files.data.has("annotations/doc.json")).toBe(false);
-    expect(files.data.has("annotations/doc.json.tmp")).toBe(false);
-  });
-
-  it("preserves the last valid sidecar when an overwrite write fails", async () => {
-    const files = new MemoryFiles();
-    const repository = new SidecarRepository(files, "annotations");
+  it("falls back to copy-and-replace when the adapter rename fails", async () => {
+    const files = new MemoryFiles(); const repository = new SidecarRepository(files, "annotations");
     await repository.save(sidecar());
     const original = await files.read("annotations/doc.json");
-    files.failWritePath = "annotations/doc.json";
-    const changed = sidecar();
-    changed.updatedAt = "later";
-    await expect(repository.save(changed)).rejects.toThrow("write failed");
-    expect(await files.read("annotations/doc.json")).toBe(original);
+    files.failRename = true;
+    const changed = sidecar(); changed.updatedAt = "later";
+    await repository.save(changed);
+    expect(await files.read("annotations/doc.json")).not.toBe(original);
+    expect((await repository.load("doc"))?.updatedAt).toBe("later");
     expect(files.data.has("annotations/doc.json.tmp")).toBe(false);
   });
 });

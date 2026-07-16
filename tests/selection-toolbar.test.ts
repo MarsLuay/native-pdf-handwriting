@@ -22,7 +22,6 @@ describe("selection toolbar viewport", () => {
     const toolbar = new SelectionToolbar({
       onDelete: () => undefined,
       onDuplicate: () => undefined,
-      onRecolor: () => undefined,
       onClear: () => undefined
     });
     toolbar.bindViewport(viewer);
@@ -30,6 +29,10 @@ describe("selection toolbar viewport", () => {
 
     expect(toolbar.element.style.left).toBe("140px");
     expect(toolbar.element.style.top).toBe("216px");
+    expect(toolbar.element.querySelector("input[type='color']")).toBeNull();
+    expect(toolbar.element.textContent).toContain("Delete");
+    expect(toolbar.element.textContent).toContain("Duplicate");
+    expect(toolbar.element.textContent).toContain("Done");
 
     const handle = toolbar.element.querySelector(".native-pdf-handwriting-selection-toolbar-drag")!;
     handle.dispatchEvent(pointer("pointerdown", handle, 180, 240));

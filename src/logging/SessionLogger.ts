@@ -220,7 +220,6 @@ export class SessionLogger {
     panCapture: string;
     panBoundary?: string;
     drawEnabled?: boolean;
-    mouseDragScroll?: boolean;
     toolbarPlacement?: string;
     loadedStrokes?: number;
     sidecarStrokes?: number;

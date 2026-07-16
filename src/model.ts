@@ -1,23 +1,22 @@
 export type DrawingTool = "pen" | "pencil" | "highlighter";
-export type ToolId = DrawingTool | "eraser" | "lasso" | "laser" | "pan";
+export type ToolId = DrawingTool | "text" | "eraser" | "lasso" | "laser" | "pan";
 export type LassoType = "freeform" | "rectangle";
 export type ToolbarPlacement = "main" | "left" | "right";
 export type SaveStatus = "saved" | "saving" | "dirty" | "failed";
+export type TextEscapeAction = "save" | "discard";
+export type SingleTouchMode = "none" | "touch" | "stylus";
 
-export const DRAWING_TOOLS = ["pen", "pencil", "highlighter"] as const;
-
-export function isDrawingTool(tool: string): tool is DrawingTool {
+export function isDrawingTool(tool: ToolId): tool is DrawingTool {
   return tool === "pen" || tool === "pencil" || tool === "highlighter";
 }
 
-/** Freehand ink routed as draw (persisted tools + ephemeral laser). */
-export function isInkDrawTool(tool: string): tool is DrawingTool | "laser" {
+/** Freehand ink routed as draw (persisted tools plus the ephemeral laser). */
+export function isInkDrawTool(tool: ToolId): tool is DrawingTool | "laser" {
   return isDrawingTool(tool) || tool === "laser";
 }
 
-/** Active drawing tool, or pen when a non-drawing tool is selected. */
-export function resolveDrawingTool(active: ToolId): DrawingTool {
-  return isDrawingTool(active) ? active : "pen";
+export function resolveDrawingTool(tool: ToolId): DrawingTool {
+  return isDrawingTool(tool) ? tool : "pen";
 }
 
 export interface PdfPoint {
@@ -42,6 +41,33 @@ export interface InkStroke {
   updatedAt: string;
 }
 
+export interface PdfTextAnnotation {
+  id: string;
+  page: number;
+  text: string;
+  x: number;
+  y: number;
+  color: string;
+  fontSize: number;
+  fontFamily?: string;
+  bold?: boolean;
+  italic?: boolean;
+  runs?: PdfTextRun[];
+  sourceRuns?: PdfTextRun[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PdfTextRun {
+  text: string;
+  color: string;
+  fontSize: number;
+  fontFamily: string;
+  bold: boolean;
+  italic: boolean;
+  strikethrough: boolean;
+}
+
 export interface DrawingToolPreferences {
   color: string;
   width: number;
@@ -54,14 +80,19 @@ export interface DrawingToolPreferences {
   simulateMousePressure: boolean;
 }
 
-/** Ephemeral laser pointer — never written to sidecar. */
-export interface LaserPreferences {
+export interface TextStyle {
+  color: string;
+  fontSize: number;
+  fontFamily: string;
+  bold: boolean;
+  italic: boolean;
+}
+
+export interface LaserToolPreferences {
   color: string;
   width: number;
   opacity: number;
-  /** Full-opacity linger before fade starts (ms). */
   holdMs: number;
-  /** Fade + trail erase duration after hold (ms). */
   fadeMs: number;
 }
 
@@ -70,21 +101,31 @@ export interface ToolPreferences {
   pen: DrawingToolPreferences;
   pencil: DrawingToolPreferences;
   highlighter: DrawingToolPreferences;
-  eraser: { size: number };
+  text: TextStyle;
+  eraser: { size: number; eraseWholeStrokes: boolean; eraseWithRightMouseButton: boolean };
   lasso: { type: LassoType };
-  laser: LaserPreferences;
+  laser: LaserToolPreferences;
   recentColors: string[];
 }
 
-export interface PluginSettings {
+export interface TouchNavigationSettings {
+  singleTouchMode: SingleTouchMode;
+  twoFingerPinchZoom: boolean;
+  twoFingerSwipeScroll: boolean;
+}
+
+export interface PluginSettings extends TouchNavigationSettings {
   autosave: boolean;
   autosaveDelayMs: number;
   saveWhenClosing: boolean;
   showSaveStatus: boolean;
   retryFailedAutosaves: boolean;
+  skipTextCancelConfirmation: boolean;
+  textEscapeAction: TextEscapeAction | null;
   sidecarFolder: string;
-  mouseDragScroll: boolean;
   simplifyStrokes: boolean;
+  holdToStraighten: boolean;
+  hideStylusAnnotationLabel: boolean;
   toolbarPlacement: ToolbarPlacement;
   vaultDebugLog: boolean;
   vaultDebugLogPath: string;
@@ -102,9 +143,15 @@ export function createDefaultSettings(configDir: string): PluginSettings {
   saveWhenClosing: true,
   showSaveStatus: true,
   retryFailedAutosaves: true,
+  skipTextCancelConfirmation: false,
+  textEscapeAction: null,
   sidecarFolder: `${root}/plugins/${PLUGIN_ID}/annotations`,
-  mouseDragScroll: true,
+  singleTouchMode: "touch",
+  twoFingerPinchZoom: true,
+  twoFingerSwipeScroll: true,
   simplifyStrokes: true,
+  holdToStraighten: false,
+  hideStylusAnnotationLabel: false,
   toolbarPlacement: "main",
   vaultDebugLog: false,
   vaultDebugLogPath: `${root}/plugins/${PLUGIN_ID}/debug.log`,
@@ -123,8 +170,8 @@ export function createDefaultSettings(configDir: string): PluginSettings {
     },
     pencil: {
       color: "#4b5563",
-      width: 4,
-      opacity: 0.88,
+      width: 3.5,
+      opacity: 0.55,
       pressureSensitivity: true,
       stabilization: "low",
       thinning: 0.2,
@@ -134,25 +181,20 @@ export function createDefaultSettings(configDir: string): PluginSettings {
     },
     highlighter: {
       color: "#facc15",
-      width: 14,
-      opacity: 0.35,
+      width: 4.5,
+      opacity: 0.3,
       pressureSensitivity: false,
-      stabilization: "low",
-      thinning: 0.05,
+      stabilization: "medium",
+      thinning: 0,
       textureStrength: 0,
       tiltSensitivity: false,
-      simulateMousePressure: false
+      simulateMousePressure: true
     },
-    eraser: { size: 12 },
+    text: { color: "#111827", fontSize: 16, fontFamily: "sans-serif", bold: false, italic: false },
+    eraser: { size: 12, eraseWholeStrokes: false, eraseWithRightMouseButton: false },
     lasso: { type: "freeform" },
-    laser: {
-      color: "#ff0000",
-      width: 2,
-      opacity: 0.95,
-      holdMs: 900,
-      fadeMs: 1400
-    },
-    recentColors: ["#111827", "#2563eb", "#dc2626", "#059669", "#f59e0b", "#facc15"]
+    laser: { color: "#ff0000", width: 2, opacity: 0.95, holdMs: 900, fadeMs: 1400 },
+    recentColors: ["#111827", "#2563eb", "#dc2626", "#059669", "#f59e0b"]
   }
   };
 }
@@ -166,7 +208,9 @@ const LEGACY_SETTING_KEYS = [
   "yoloAutosaveDelayMs",
   "createBackupBeforeDirectModification",
   "backupLocation",
-  "retainSidecarAfterDirectModification"
+  "retainSidecarAfterDirectModification",
+  "mouseDragScroll",
+  "showZoomMenu"
 ] as const;
 
 export function serializePluginSettings(settings: PluginSettings): string {
@@ -190,39 +234,50 @@ export function mergeSettings(
     type: lassoRaw.type === "freeform" || lassoRaw.type === "rectangle" ? lassoRaw.type : "freeform" as const
   };
   const toolbarPlacement = cleaned.toolbarPlacement;
+  const singleTouchMode = cleaned.singleTouchMode;
+  const savedToolPreferences = { ...(cleaned.toolPreferences ?? {}) } as Record<string, unknown>;
+  delete savedToolPreferences.pan;
+  const textEscapeAction = cleaned.textEscapeAction === "save" || cleaned.textEscapeAction === "discard"
+    ? cleaned.textEscapeAction
+    : "discard";
   const merged = {
     ...defaults,
     ...cleaned,
+    skipTextCancelConfirmation: cleaned.skipTextCancelConfirmation === true,
+    textEscapeAction: cleaned.skipTextCancelConfirmation === true ? textEscapeAction : null,
     toolbarPlacement: toolbarPlacement === "left" || toolbarPlacement === "right" || toolbarPlacement === "main"
       ? toolbarPlacement
       : defaults.toolbarPlacement,
+    singleTouchMode: singleTouchMode === "none" || singleTouchMode === "touch" || singleTouchMode === "stylus"
+      ? singleTouchMode
+      : defaults.singleTouchMode,
+    twoFingerPinchZoom: cleaned.twoFingerPinchZoom !== false,
+    twoFingerSwipeScroll: cleaned.twoFingerSwipeScroll !== false,
     toolPreferences: {
       ...defaults.toolPreferences,
-      ...cleaned.toolPreferences,
+      ...savedToolPreferences,
       pen: { ...defaults.toolPreferences.pen, ...cleaned.toolPreferences?.pen },
       pencil: { ...defaults.toolPreferences.pencil, ...cleaned.toolPreferences?.pencil },
-      highlighter: {
-        ...defaults.toolPreferences.highlighter,
-        ...cleaned.toolPreferences?.highlighter
+      highlighter: { ...defaults.toolPreferences.highlighter, ...cleaned.toolPreferences?.highlighter },
+      text: {
+        color: cleaned.toolPreferences?.text?.color ?? defaults.toolPreferences.text.color,
+        fontSize: cleaned.toolPreferences?.text?.fontSize ?? defaults.toolPreferences.text.fontSize,
+        fontFamily: cleaned.toolPreferences?.text?.fontFamily ?? defaults.toolPreferences.text.fontFamily,
+        bold: cleaned.toolPreferences?.text?.bold === true,
+        italic: cleaned.toolPreferences?.text?.italic === true
       },
-      eraser: { size: cleaned.toolPreferences?.eraser?.size ?? defaults.toolPreferences.eraser.size },
-      lasso,
+      eraser: {
+        size: cleaned.toolPreferences?.eraser?.size ?? defaults.toolPreferences.eraser.size,
+        eraseWholeStrokes: cleaned.toolPreferences?.eraser?.eraseWholeStrokes === true,
+        eraseWithRightMouseButton: cleaned.toolPreferences?.eraser?.eraseWithRightMouseButton === true
+      },
       laser: {
         ...defaults.toolPreferences.laser,
         ...cleaned.toolPreferences?.laser,
-        holdMs: clampLaserMs(
-          cleaned.toolPreferences?.laser?.holdMs ?? defaults.toolPreferences.laser.holdMs,
-          200,
-          3000,
-          defaults.toolPreferences.laser.holdMs
-        ),
-        fadeMs: clampLaserMs(
-          cleaned.toolPreferences?.laser?.fadeMs ?? defaults.toolPreferences.laser.fadeMs,
-          300,
-          4000,
-          defaults.toolPreferences.laser.fadeMs
-        )
-      }
+        holdMs: clampLaserTiming(cleaned.toolPreferences?.laser?.holdMs, 200, 3000, defaults.toolPreferences.laser.holdMs),
+        fadeMs: clampLaserTiming(cleaned.toolPreferences?.laser?.fadeMs, 300, 4000, defaults.toolPreferences.laser.fadeMs)
+      },
+      lasso
     }
   };
   merged.sidecarFolder = remapPluginDataPath(cleaned.sidecarFolder, defaults.sidecarFolder, configDir);
@@ -230,7 +285,14 @@ export function mergeSettings(
   return merged;
 }
 
+function clampLaserTiming(value: number | undefined, min: number, max: number, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(max, Math.max(min, Math.round(value)))
+    : fallback;
+}
+
 function remapPluginDataPath(saved: string | undefined, fallback: string, configDir: string): string {
+  if (saved === "") return "";
   if (!saved || !saved.trim()) return fallback;
   const marker = `/plugins/${PLUGIN_ID}`;
   const normalized = saved.replace(/\\/g, "/");
@@ -240,9 +302,4 @@ function remapPluginDataPath(saved: string | undefined, fallback: string, config
     return `${root}${normalized.slice(index)}`;
   }
   return saved;
-}
-
-function clampLaserMs(value: number, min: number, max: number, fallback: number): number {
-  if (!Number.isFinite(value)) return fallback;
-  return Math.min(max, Math.max(min, Math.round(value)));
 }

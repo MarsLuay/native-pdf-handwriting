@@ -43,14 +43,44 @@ describe("safe defaults", () => {
     expect(merged.toolPreferences.laser.width).toBe(DEFAULT_SETTINGS.toolPreferences.laser.width);
   });
 
-  it("enables mouse drag scroll by default", () => {
-    expect(DEFAULT_SETTINGS.mouseDragScroll).toBe(true);
-    expect({ ...DEFAULT_SETTINGS, mouseDragScroll: false }.mouseDragScroll).toBe(false);
+  it("keeps right mouse erasing disabled until explicitly enabled", () => {
+    expect(DEFAULT_SETTINGS.toolPreferences.eraser.eraseWithRightMouseButton).toBe(false);
+    expect(mergeSettings({
+      toolPreferences: { eraser: { eraseWithRightMouseButton: true } } as never
+    }).toolPreferences.eraser.eraseWithRightMouseButton).toBe(true);
+  });
+
+  it("defaults touch navigation to one-finger scrolling with two-finger zoom and swipe enabled", () => {
+    expect(DEFAULT_SETTINGS.singleTouchMode).toBe("touch");
+    expect(DEFAULT_SETTINGS.twoFingerPinchZoom).toBe(true);
+    expect(DEFAULT_SETTINGS.twoFingerSwipeScroll).toBe(true);
+    expect(mergeSettings({ singleTouchMode: "stylus", twoFingerPinchZoom: false, twoFingerSwipeScroll: false }))
+      .toMatchObject({ singleTouchMode: "stylus", twoFingerPinchZoom: false, twoFingerSwipeScroll: false });
+    expect(mergeSettings({ singleTouchMode: "invalid" as never }).singleTouchMode).toBe("touch");
   });
 
   it("enables stroke simplification by default", () => {
     expect(DEFAULT_SETTINGS.simplifyStrokes).toBe(true);
     expect({ ...DEFAULT_SETTINGS, simplifyStrokes: false }.simplifyStrokes).toBe(false);
+  });
+
+  it("keeps hold to straighten disabled until explicitly enabled", () => {
+    expect(DEFAULT_SETTINGS.holdToStraighten).toBe(false);
+    expect(mergeSettings({ holdToStraighten: true }).holdToStraighten).toBe(true);
+  });
+
+  it("remembers only a valid Escape text action when confirmation is skipped", () => {
+    expect(DEFAULT_SETTINGS.skipTextCancelConfirmation).toBe(false);
+    expect(DEFAULT_SETTINGS.textEscapeAction).toBeNull();
+    expect(mergeSettings({ skipTextCancelConfirmation: true, textEscapeAction: "save" }).textEscapeAction).toBe("save");
+    expect(mergeSettings({ skipTextCancelConfirmation: true, textEscapeAction: "discard" }).textEscapeAction).toBe("discard");
+    expect(mergeSettings({ skipTextCancelConfirmation: false, textEscapeAction: "save" }).textEscapeAction).toBeNull();
+    expect(mergeSettings({ skipTextCancelConfirmation: true, textEscapeAction: "keep-editing" as never }).textEscapeAction).toBe("discard");
+  });
+
+  it("shows the stylus annotation label by default", () => {
+    expect(DEFAULT_SETTINGS.hideStylusAnnotationLabel).toBe(false);
+    expect(mergeSettings({ hideStylusAnnotationLabel: true }).hideStylusAnnotationLabel).toBe(true);
   });
 
   it("keeps vault debug log off by default", () => {
@@ -60,15 +90,21 @@ describe("safe defaults", () => {
     );
   });
 
+  it("keeps a custom vault-relative annotation sidecar folder", () => {
+    expect(mergeSettings({ sidecarFolder: "Annotations/PDF ink" }).sidecarFolder).toBe("Annotations/PDF ink");
+  });
+
   it("defaults toolbar placement to the PDF bar", () => {
     expect(DEFAULT_SETTINGS.toolbarPlacement).toBe("main");
     expect(mergeSettings({ toolbarPlacement: "right" }).toolbarPlacement).toBe("right");
     expect(mergeSettings({ toolbarPlacement: "nope" as "main" }).toolbarPlacement).toBe("main");
   });
 
-  it("strips legacy YOLO Mode keys and unused lasso fields from saved settings", () => {
+  it("strips legacy navigation, YOLO Mode, and unused lasso fields from saved settings", () => {
     const merged = mergeSettings({
       autosave: false,
+      mouseDragScroll: false,
+      showZoomMenu: true,
       yoloMode: true,
       yoloConfirmed: true,
       yoloAutosaveDelayMs: 9999,
@@ -83,7 +119,16 @@ describe("safe defaults", () => {
     expect(merged).not.toHaveProperty("yoloMode");
     expect(merged).not.toHaveProperty("yoloConfirmed");
     expect(merged).not.toHaveProperty("backupLocation");
+    expect(merged).not.toHaveProperty("mouseDragScroll");
+    expect(merged).not.toHaveProperty("showZoomMenu");
     expect(merged.toolPreferences.lasso).toEqual({ type: "rectangle" });
+  });
+
+  it("removes the legacy Pan touch preference during migration", () => {
+    const merged = mergeSettings({
+      toolPreferences: { pan: { treatSingleTouchAsStylus: true } } as never
+    });
+    expect(merged.toolPreferences).not.toHaveProperty("pan");
   });
 
   it("copies every setting as readable JSON", () => {

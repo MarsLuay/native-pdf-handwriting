@@ -23,7 +23,7 @@ export class VaultDebugLog implements VaultLogSink {
   ) {}
 
   write(level: VaultLogLevel, event: string, payload: Record<string, unknown> = {}): void {
-    if (!this.enabled()) return;
+    if (!this.enabled() || !this.path().trim()) return;
     this.buffer.push(JSON.stringify({
       ts: new Date().toISOString(),
       level,

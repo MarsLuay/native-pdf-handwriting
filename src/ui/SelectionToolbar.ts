@@ -2,7 +2,6 @@ import { setElementCssProps } from "../dom/typeGuards";
 export interface SelectionToolbarCallbacks {
   onDelete(): void;
   onDuplicate(): void;
-  onRecolor(color: string): void;
   onClear(): void;
 }
 
@@ -41,13 +40,9 @@ export class SelectionToolbar {
     this.element.append(
       this.dragHandle,
       this.button(doc, "Delete", () => callbacks.onDelete()),
-      this.button(doc, "Duplicate", () => callbacks.onDuplicate())
+      this.button(doc, "Duplicate", () => callbacks.onDuplicate()),
+      this.button(doc, "Done", () => callbacks.onClear())
     );
-    const color = doc.createElement("input");
-    color.type = "color";
-    color.setAttribute("aria-label", "Recolor selected strokes");
-    color.addEventListener("input", () => callbacks.onRecolor(color.value), { signal: this.abort.signal });
-    this.element.append(color, this.button(doc, "Done", () => callbacks.onClear()));
     for (const type of ["pointerup", "click"] as const) {
       this.element.addEventListener(type, (event) => event.stopPropagation(), { signal: this.abort.signal });
     }

@@ -4,3 +4,4 @@ node_modules/
 coverage/
 *.map
 .DS_Store
+data.json

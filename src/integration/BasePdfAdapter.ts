@@ -12,7 +12,7 @@ import {
   type PdfSidebarOffsetReason
 } from "./PdfSidebarRailOffset";
 import type { CompatibilityResult } from "./PdfViewerCompatibility";
-import { installPdfZoomBoost, type PdfZoomBoostHandle } from "./PdfZoomBoost";
+import { installPdfZoomBoost, OBSIDIAN_DEFAULT_MAX_SCALE, type PdfZoomBoostHandle } from "./PdfZoomBoost";
 
 const LOG_PREFIX = "[Handwriting Natively]";
 
@@ -81,6 +81,26 @@ export abstract class BasePdfAdapter implements ObsidianPdfAdapter {
 
   scrollElement(): HTMLElement {
     return resolvePdfScrollRoot(this.root, this.compatibility.privateViewer, this.host);
+  }
+
+  setScale(scale: number): boolean {
+    return this.zoomBoost?.setScale(scale) ?? false;
+  }
+
+  setScaleValue(value: string | number): boolean {
+    return this.zoomBoost?.setScaleValue(value) ?? false;
+  }
+
+  zoomBySteps(steps: number): boolean {
+    return this.zoomBoost?.zoomBySteps(steps) ?? false;
+  }
+
+  zoomByScaleFactor(factor: number, origin?: [number, number]): boolean {
+    return this.zoomBoost?.zoomByScaleFactor(factor, origin) ?? false;
+  }
+
+  maxScale(): number {
+    return this.zoomBoost?.maxScale() ?? OBSIDIAN_DEFAULT_MAX_SCALE;
   }
 
   mountOverlay(pageNumber: number): HTMLElement {

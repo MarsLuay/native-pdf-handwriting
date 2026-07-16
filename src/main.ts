@@ -210,10 +210,26 @@ export default class NativePdfInkPlugin extends Plugin {
 
   async saveSettings(settings: PluginSettings): Promise<void> {
     const previousPlacement = this.settings.toolbarPlacement;
+    const previousStylusAnnotationLabel = this.settings.hideStylusAnnotationLabel;
+    const previousHoldToStraighten = this.settings.holdToStraighten;
+    const previousSkipTextCancelConfirmation = this.settings.skipTextCancelConfirmation;
+    const previousTextEscapeAction = this.settings.textEscapeAction;
     this.settings = settings;
     await this.saveData(settings);
     if (previousPlacement !== settings.toolbarPlacement) {
       for (const session of this.allSessions()) session.remountToolbar();
+    }
+    if (previousStylusAnnotationLabel !== settings.hideStylusAnnotationLabel) {
+      for (const session of this.allSessions()) session.setStylusAnnotationLabelHidden(settings.hideStylusAnnotationLabel);
+    }
+    if (previousHoldToStraighten !== settings.holdToStraighten) {
+      for (const session of this.allSessions()) session.setHoldToStraighten(settings.holdToStraighten);
+    }
+    if (previousSkipTextCancelConfirmation !== settings.skipTextCancelConfirmation ||
+        previousTextEscapeAction !== settings.textEscapeAction) {
+      for (const session of this.allSessions()) {
+        session.setTextEscapeBehavior(settings.skipTextCancelConfirmation, settings.textEscapeAction);
+      }
     }
   }
 
@@ -353,7 +369,7 @@ export default class NativePdfInkPlugin extends Plugin {
       writeExport: async (name, bytes) => this.writeAndOpenExport(file, name, bytes),
       notice: (message) => new Notice(message),
       decideUnsaved: () => this.decideUnsaved(),
-      mouseDragScrollEnabled: () => this.settings.mouseDragScroll,
+      touchNavigationSettings: () => this.settings,
       simplifyStrokesEnabled: () => this.settings.simplifyStrokes,
       toolbarPlacement: () => this.settings.toolbarPlacement,
       vaultLog: this.vaultDebugLog,
@@ -417,11 +433,10 @@ export default class NativePdfInkPlugin extends Plugin {
   }
 
   private async saveToolPreferences(preferences: ToolPreferences): Promise<void> {
-    this.settings = {
+    await this.saveSettings({
       ...this.settings,
       toolPreferences: structuredClone(preferences)
-    };
-    await this.saveData(this.settings);
+    });
   }
 
   private async writeAndOpenExport(source: TFile, name: string, bytes: Uint8Array): Promise<string> {

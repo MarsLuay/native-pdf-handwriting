@@ -52,22 +52,45 @@ describe("stroke builder", () => {
     expect(builder.preview(false)).toEqual(builder.finish(false).points);
   });
 
-  it("finishMatchingPreview keeps live preview geometry (no release snap)", () => {
-    const opts = { ...base, stabilization: "medium" as const };
-    const builder = new StrokeBuilder(opts);
-    for (const p of [point(0, 0), point(1, 0.01), point(2, 0), point(3, 0.02), point(4, 0)]) {
-      builder.add(p);
-    }
-    const preview = builder.preview(true);
-    const matched = builder.finishMatchingPreview(true).points;
-    expect(matched).toEqual(preview);
-    expect(builder.id).toBe("stroke-1");
+  it("uses a straight line for preview and finish after a hold is recognized", () => {
+    const builder = new StrokeBuilder(base);
+    builder.add(point(0, 0));
+    builder.add(point(2, 4));
+    builder.add(point(6, 1));
+    expect(builder.straighten()).toBe(true);
+    expect(builder.preview(false)).toEqual([point(0, 0), point(6, 1)]);
+    expect(builder.finish(false).points).toEqual([point(0, 0), point(6, 1)]);
+  });
 
-    const simplifyBuilder = new StrokeBuilder(opts);
-    for (const p of [point(0, 0), point(1, 0.01), point(2, 0), point(3, 0.02), point(4, 0)]) {
-      simplifyBuilder.add(p);
-    }
-    // Regular finish simplifies — that was the release snap.
-    expect(simplifyBuilder.finish(true).points.length).toBeLessThan(matched.length);
+  it("snaps held lines within one degree of horizontal or vertical", () => {
+    const horizontal = new StrokeBuilder(base);
+    horizontal.add(point(0, 0));
+    horizontal.add(point(100, 1.74)); // Just under 1 degree.
+    horizontal.straighten();
+    expect(horizontal.finish(false).points[1]).toMatchObject({ x: 100, y: 0 });
+
+    const vertical = new StrokeBuilder(base);
+    vertical.add(point(0, 0));
+    vertical.add(point(1.74, 100)); // Just under 1 degree from vertical.
+    vertical.straighten();
+    expect(vertical.finish(false).points[1]).toMatchObject({ x: 0, y: 100 });
+  });
+
+  it("keeps held lines outside the one-degree axis threshold unchanged", () => {
+    const builder = new StrokeBuilder(base);
+    builder.add(point(0, 0));
+    builder.add(point(100, 1.75)); // Just over 1 degree.
+    builder.straighten();
+    expect(builder.finish(false).points[1]).toMatchObject({ x: 100, y: 1.75 });
+  });
+
+  it("updates the straight line endpoint without leaving straightened mode", () => {
+    const builder = new StrokeBuilder(base);
+    builder.add(point(0, 0));
+    builder.add(point(4, 4));
+    builder.straighten();
+    expect(builder.updateStraightenedEndpoint(point(6, 2))).toBe(true);
+    expect(builder.preview(false)).toEqual([point(0, 0), point(6, 2)]);
+    expect(builder.finish(false).points).toEqual([point(0, 0), point(6, 2)]);
   });
 });

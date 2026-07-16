@@ -1,5 +1,5 @@
 import esbuild from "esbuild";
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { builtinModules } from "node:module";
 import { dirname, resolve } from "node:path";
 import process from "node:process";
@@ -7,7 +7,15 @@ import { fileURLToPath } from "node:url";
 
 const production = process.argv[2] === "production";
 const root = dirname(fileURLToPath(import.meta.url));
-const vaultPluginDir = resolve(root, "../../.obsidian/plugins/native-pdf-handwriting");
+const vaultPluginDir = resolve(root, "../native-pdf-handwriting");
+
+function normalizePdfJsBundleWhitespace() {
+  const output = resolve(root, "main.js");
+  const unstable = "e+=s.deleted?\"f\":\"n\",e+=` \n`}}return e";
+  const stable = "e+=s.deleted?\"f\":\"n\",e+=`\\x20\n`}}return e";
+  const bundle = readFileSync(output, "utf8");
+  if (bundle.includes(unstable)) writeFileSync(output, bundle.replaceAll(unstable, stable));
+}
 
 function deployToVaultPlugin() {
   if (!existsSync(vaultPluginDir)) mkdirSync(vaultPluginDir, { recursive: true });
@@ -36,6 +44,7 @@ const context = await esbuild.context({
       build.onEnd((result) => {
         if (result.errors.length) return;
         try {
+          normalizePdfJsBundleWhitespace();
           deployToVaultPlugin();
         } catch (error) {
           console.warn("[deploy] failed:", error);

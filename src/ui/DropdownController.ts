@@ -12,6 +12,7 @@ export interface DropdownOpenOptions {
   label: string;
   options?: DropdownOption[];
   content?: HTMLElement;
+  focusFirst?: boolean;
 }
 
 export class DropdownController {
@@ -60,7 +61,7 @@ export class DropdownController {
     this.ownerDocument.addEventListener("keydown", this.onKeyDown, { signal: this.abort.signal });
     this.ownerDocument.defaultView?.addEventListener("resize", this.reposition, { signal: this.abort.signal });
     this.ownerDocument.defaultView?.addEventListener("scroll", this.reposition, { capture: true, signal: this.abort.signal });
-    this.enabledItems()[0]?.focus();
+    if (options.focusFirst !== false) this.enabledItems()[0]?.focus();
   }
 
   close(restoreFocus = true): void {

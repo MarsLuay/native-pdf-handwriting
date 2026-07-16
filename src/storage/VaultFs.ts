@@ -83,19 +83,17 @@ export function createVaultFsTextAdapter(vault: Vault): TextFileAdapter {
     async rename(from, to) {
       const src = normalizeVaultRelativePath(from);
       const dest = normalizeVaultRelativePath(to);
-      await ensureVaultFolder(vault, parentPath(dest));
-      // Obsidian refuses adapter.rename when dest already exists.
-      if (await adapter.exists(dest)) {
-        const contents = await adapter.read(src);
-        await adapter.write(dest, contents);
-        if (await adapter.exists(src)) await adapter.remove(src);
-        return;
-      }
       if (typeof adapter.rename === "function") {
-        await adapter.rename(src, dest);
-        return;
+        try {
+          await ensureVaultFolder(vault, parentPath(dest));
+          await adapter.rename(src, dest);
+          return;
+        } catch {
+          // Some mobile adapters expose rename but do not support it for sidecar files.
+        }
       }
       const contents = await adapter.read(src);
+      await ensureVaultFolder(vault, parentPath(dest));
       await adapter.write(dest, contents);
       if (await adapter.exists(src)) await adapter.remove(src);
     },

@@ -81,6 +81,10 @@ class ZoomAdapter implements ObsidianPdfAdapter {
   pageHeight = 800;
   hostBox = rect(0, 0, 600, 800);
   contentBox = rect(0, 0, 600, 800);
+  readonly zoomByScaleFactor = vi.fn((factor: number) => {
+    this.scale *= factor;
+    return true;
+  });
 
   constructor() {
     this.pageElement.dataset.pageNumber = "1";
@@ -321,6 +325,26 @@ describe("zoom ink compositing", () => {
     expect(overlay.style.top).toBe("20px");
     expect(overlay.style.width).toBe("900px");
     expect(overlay.style.height).toBe("1200px");
+
+    await session.destroy();
+  });
+
+  it("starts compositing before the viewer applies a pinch scale change", async () => {
+    const adapter = new ZoomAdapter();
+    const session = await createSession(adapter);
+    const overlay = overlayOf(adapter);
+    let compositingAtZoomCall = false;
+    adapter.zoomByScaleFactor.mockImplementation(() => {
+      compositingAtZoomCall = overlay.classList.contains("native-pdf-handwriting-zoom-compositing");
+      return true;
+    });
+
+    (session as unknown as { zoomAroundPinch(factor: number, clientX: number, clientY: number): void })
+      .zoomAroundPinch(1.1, 200, 300);
+
+    expect(adapter.zoomByScaleFactor).toHaveBeenCalledWith(1.1, [200, 300]);
+    expect(compositingAtZoomCall).toBe(true);
+    expect(overlay.classList.contains("native-pdf-handwriting-zoom-compositing")).toBe(true);
 
     await session.destroy();
   });

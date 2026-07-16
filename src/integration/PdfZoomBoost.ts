@@ -1,12 +1,14 @@
 import type { PdfJsViewerLike } from "./PdfViewerCompatibility";
 
-/** Obsidian PDF.js clamps pinch/native zoom at literal 10× in updateScale. */
+/** Obsidian PDF.js clamps pinch/button zoom at literal 10× in updateScale. */
 export const OBSIDIAN_DEFAULT_MAX_SCALE = 10;
 /** Allow denser writing; still below extreme canvas blowups. */
 export const BOOSTED_MAX_SCALE = 25;
 const MIN_SCALE = 0.1;
 /** Default Obsidian maxCanvasPixels is 16MP — letter @ ~10× already exceeds it. */
 const BOOSTED_MAX_CANVAS_PIXELS = 64 * 1024 * 1024;
+/** Keep the current PDF.js bitmap visible while a touch pinch is still moving. */
+export const PINCH_RENDER_DELAY_MS = 150;
 
 export type UpdateScaleOptions = {
   drawingDelay?: number;
@@ -32,6 +34,10 @@ type PdfjsViewerGlobals = {
 };
 
 export interface PdfZoomBoostHandle {
+  setScale(scale: number): boolean;
+  setScaleValue(value: string | number): boolean;
+  zoomBySteps(steps: number): boolean;
+  zoomByScaleFactor(factor: number, origin?: [number, number]): boolean;
   maxScale(): number;
   destroy(): void;
 }
@@ -106,7 +112,45 @@ export function installPdfZoomBoost(
     };
   }
 
+  const setScale = (scale: number): boolean => {
+    const capped = clampPdfScale(scale, maxScale);
+    try {
+      zoomable.currentScale = capped;
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   return {
+    setScale,
+    setScaleValue(value: string | number): boolean {
+      if (typeof value === "number") return setScale(value);
+      try {
+        zoomable.currentScaleValue = value;
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    zoomBySteps(steps: number): boolean {
+      const before = Number(zoomable.currentScale) || 1;
+      if (originalUpdateScale) {
+        zoomable.updateScale?.({ steps, drawingDelay: 400 });
+        return true;
+      }
+      const desired = computeTargetScale(before, { steps });
+      return desired != null ? setScale(desired) : false;
+    },
+    zoomByScaleFactor(factor: number, origin?: [number, number]): boolean {
+      if (!Number.isFinite(factor) || factor <= 0 || Math.abs(factor - 1) < 0.001) return false;
+      if (originalUpdateScale) {
+        zoomable.updateScale?.({ scaleFactor: factor, drawingDelay: PINCH_RENDER_DELAY_MS, origin });
+        return true;
+      }
+      const desired = computeTargetScale(Number(zoomable.currentScale) || 1, { scaleFactor: factor });
+      return desired != null ? setScale(desired) : false;
+    },
     maxScale: () => maxScale,
     destroy(): void {
       if (originalUpdateScale) zoomable.updateScale = originalUpdateScale;

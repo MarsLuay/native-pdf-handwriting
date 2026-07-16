@@ -1,11 +1,10 @@
-import type { DrawingTool, InkStroke, PdfPoint, PluginSettings, ToolbarPlacement, ToolPreferences } from "../model";
-import { isInkDrawTool, resolveDrawingTool } from "../model";
+import { isDrawingTool, resolveDrawingTool, type DrawingTool, type InkStroke, type PdfPoint, type PdfTextAnnotation, type PdfTextRun, type PluginSettings, type TextStyle, type ToolbarPlacement, type ToolPreferences, type TouchNavigationSettings } from "../model";
 import type { ObsidianPdfAdapter } from "../integration/ObsidianPdfAdapter";
 import type { PdfPageInfo } from "../integration/PdfPageLocator";
 import { PointerRouter } from "../input/PointerRouter";
 import { ViewerMousePan, type MousePanPhase } from "../input/ViewerMousePan";
 import { shouldIgnoreSelectionShortcut, parseSelectionShortcut, parseHistoryShortcut, type SelectionShortcutAction } from "../input/SelectionShortcuts";
-import type { PointerSample } from "../input/PointerCapabilities";
+import { PointerCapabilities, type PointerSample } from "../input/PointerCapabilities";
 import { InkSession } from "../ink/InkSession";
 import { StrokeBuilder } from "../ink/StrokeBuilder";
 import { StrokeClipboard } from "../ink/StrokeClipboard";
@@ -13,18 +12,13 @@ import { simplifyPoints } from "../ink/StrokeStabilizer";
 import { PdfCoordinateMapper, type PageRotation } from "../pdf/PdfCoordinateMapper";
 import { normalizeRotation, pdfRenderCanvas, resolvePageCoordinateLayout, type PageCoordinateLayout } from "../pdf/PageCoordinateLayout";
 import { setElementCssProps } from "../dom/typeGuards";
-import { PdfExportService, annotatedFilename } from "../pdf/PdfExportService";
+import { PdfExportService, annotatedFilename, editableAnnotatedFilename, type PdfExportMode } from "../pdf/PdfExportService";
 import { AddStrokeCommand, AddStrokesCommand, DeleteStrokesCommand, ReplacePageStrokesCommand, ReplaceStrokesCommand, translateStrokes } from "../history/AnnotationCommands";
 import { CommandHistory, type Command } from "../history/CommandHistory";
-import { eraseStrokes } from "../tools/EraserTool";
+import { eraseStrokes, eraseWholeStrokes } from "../tools/EraserTool";
 import { boundingShapeFromStrokes, filterSelectableStrokes, selectStrokes, selectionShapeArea, shapeBounds, shapeContainsPoint, translateShape, type SelectionShape } from "../tools/LassoTool";
-import { drawHighlighterStroke } from "../tools/HighlighterTool";
-import {
-  drawLaserStroke,
-  laserTrailStillVisible,
-  mapLaserPoints
-} from "../tools/LaserTool";
 import { drawGraphiteStroke, seedFromId } from "../tools/PencilTool";
+import { drawLaserStroke, laserTrailStillVisible, mapLaserPoints } from "../tools/LaserTool";
 import { drawPenStroke } from "../tools/PenTool";
 import { AutosaveQueue } from "../storage/AutosaveQueue";
 import { createDocumentIdentity } from "../storage/DocumentIdentity";
@@ -60,7 +54,7 @@ export interface ViewerInkSessionOptions {
   writeExport(name: string, bytes: Uint8Array): Promise<string | void>;
   notice(message: string): void;
   decideUnsaved?(): Promise<CloseChoice>;
-  mouseDragScrollEnabled?(): boolean;
+  touchNavigationSettings?(): TouchNavigationSettings;
   simplifyStrokesEnabled?(): boolean;
   toolbarPlacement?: () => ToolbarPlacement;
   vaultLog?: VaultLogSink;
@@ -71,17 +65,6 @@ export interface ViewerInkSessionOptions {
   /** Monotonic epoch per document so a replaced session cannot overwrite a newer one. */
   claimPersistEpoch?: (documentId: string) => number;
   livePersistEpoch?: (documentId: string) => number;
-}
-
-interface LaserTrail {
-  id: string;
-  page: number;
-  points: PdfPoint[];
-  color: string;
-  width: number;
-  opacity: number;
-  holdMs: number;
-  fadeMs: number;
 }
 
 interface PageSurface {
@@ -95,18 +78,62 @@ interface PageSurface {
   inkLayerValid: boolean;
   router: PointerRouter | null;
   builder: StrokeBuilder | undefined;
-  /** True while the live StrokeBuilder is a non-persisted laser draft. */
   laserDraft: boolean;
+  straightenTimer: number | null;
+  straightenAnchor: PdfPoint | undefined;
   editPath: PdfPoint[];
   editTool: "eraser" | "lasso" | undefined;
+  textEditActive: boolean;
   eraserSize: number | undefined;
+  eraserWholeStrokes: boolean | undefined;
+}
+
+interface ActiveTextEditor {
+  input: HTMLDivElement;
+  runs: PdfTextRun[];
+  composing: boolean;
+  point: Pick<PdfPoint, "x" | "y">;
+  selectionStart: number;
+  selectionEnd: number;
+  style: TextStyle;
+  page: number;
+  annotationId: string | undefined;
+  abort: AbortController;
+  commit: () => void;
+  preserveBlur: boolean;
+  cancelled: boolean;
+  cancelDialog: HTMLElement | null;
+  drag: { pointerId: number; start: PdfPoint; origin: Pick<PdfPoint, "x" | "y"> } | null;
+}
+
+interface ZoomBurst {
+  startedAt: number;
+  tickCount: number;
+  scaleStart: number | null;
+  scaleEnd: number | null;
+  reason: string;
+}
+
+interface LaserTrail {
+  id: string;
+  page: number;
+  points: PdfPoint[];
+  color: string;
+  width: number;
+  opacity: number;
+  holdMs: number;
+  fadeMs: number;
 }
 
 export class ViewerInkSession {
   private readonly ink = new InkSession();
+  private readonly textAnnotations = new Map<number, PdfTextAnnotation[]>();
+  private activeTextEditor: ActiveTextEditor | null = null;
   private readonly identity;
   private readonly surfaces = new Map<number, PageSurface>();
   private readonly exporter = new PdfExportService();
+  private readonly laserTrails: LaserTrail[] = [];
+  private laserFadeFrame: number | null = null;
   private readonly createdAt = new Date().toISOString();
   private readonly toolbar: AnnotationToolbar;
   private readonly selectionToolbar: SelectionToolbar;
@@ -114,12 +141,21 @@ export class ViewerInkSession {
   private readonly autosave: AutosaveQueue<SidecarSchemaV1>;
   private readonly saveCoordinator: SaveCoordinator;
   private selected: InkStroke[] = [];
+  private selectedTexts: PdfTextAnnotation[] = [];
   private selectionShape: SelectionShape | null = null;
   private selectionPage: number | null = null;
-  private moveDrag: { page: number; start: PdfPoint; before: InkStroke[]; beforeShape: SelectionShape } | null = null;
+  private moveDrag: {
+    page: number;
+    start: PdfPoint;
+    before: InkStroke[];
+    beforeTexts: PdfTextAnnotation[];
+    beforeShape: SelectionShape;
+    openTextOnClick?: PdfTextAnnotation;
+  } | null = null;
   private movePreview: InkStroke[] | null = null;
+  private moveTextPreview: PdfTextAnnotation[] | null = null;
   private moveShapePreview: SelectionShape | null = null;
-  private drawEnabled = false;
+  private drawEnabled = true;
   private debugState: DebugState = {};
   private destroyed = false;
   private detachNotified = false;
@@ -131,16 +167,13 @@ export class ViewerInkSession {
   private resizeFrame: number | null = null;
   private pendingScheduledRefresh: { reason: string; repaintOnly: boolean } | null = null;
   private zoomSettleTimer: number | null = null;
-  private zoomBurstStartedAt = 0;
-  private zoomTickCount = 0;
-  private zoomBurstScaleStart: number | null = null;
-  private zoomBurstScaleEnd: number | null = null;
-  private zoomBurstReason = "view-scalechanging";
-  private laserTrails: LaserTrail[] = [];
-  private laserFadeFrame: number | null = null;
-  private lastLaserPaintAt = 0;
-  /** Laser fade loop caps ~30fps — full page repaint every frame is too heavy. */
-  private static readonly LASER_FADE_MIN_MS = 32;
+  private zoomBurst: ZoomBurst = {
+    startedAt: 0,
+    tickCount: 0,
+    scaleStart: null,
+    scaleEnd: null,
+    reason: "view-scalechanging"
+  };
   private lastZoomSignalAt = 0;
   private zoomCompositing = false;
   private static readonly ZOOM_SETTLE_MS = 120;
@@ -165,12 +198,21 @@ export class ViewerInkSession {
       preferences: options.settings.toolPreferences,
       autosave: options.settings.autosave,
       drawEnabled: this.drawEnabled,
-      supportedMoreActions: ["export", "toolbar-main", "toolbar-left", "toolbar-right"],
+      supportedMoreActions: ["export-flattened", "export-editable", "toolbar-main", "toolbar-left", "toolbar-right"],
       callbacks: {
         onPreferencesChange: (preferences) => {
           void options.saveSettings(preferences);
           this.refresh("preferences");
         },
+        onTextStyleChange: (patch) => this.applyTextStyle(patch),
+        onTextMarkdownFormat: (format) => this.insertTextMarkdownFormat(format),
+        selectedTextFontSize: () => this.activeTextSelectionFontSize(),
+        selectedTextColor: () => this.activeTextColor(),
+        onSelectionColorChange: (color) => this.recolorSelection(color),
+        onSelectionWidthChange: (width) => this.resizeSelection(width),
+        hasActiveTextInput: () => this.activeTextEditor !== null,
+        hasSelectedText: () => this.selectedTexts.length > 0,
+        onTextEditorInteractionStart: () => this.preserveTextEditorSelection(),
         onEraserSizePreview: () => {
           this.refreshSurfaceCursors();
         },
@@ -190,8 +232,10 @@ export class ViewerInkSession {
     this.selectionToolbar = new SelectionToolbar({
       onDelete: () => this.deleteSelection(),
       onDuplicate: () => this.duplicateSelection(),
-      onRecolor: (color) => this.recolorSelection(color),
-      onClear: () => this.clearSelection()
+      onClear: () => {
+        this.commitActiveTextInput();
+        this.clearSelection();
+      }
     });
     this.selectionToolbar.bindViewport(options.adapter.root);
     this.autosave = new AutosaveQueue<SidecarSchemaV1>({
@@ -232,8 +276,8 @@ export class ViewerInkSession {
     this.resizeObserver?.observe(options.adapter.root);
     const adapter = options.adapter;
     this.viewerMousePan = new ViewerMousePan(adapter.host.ownerDocument, {
-      enabled: () => !this.drawEnabled && (this.options.mouseDragScrollEnabled?.() ?? this.options.settings.mouseDragScroll),
-      touchPanEnabled: () => true,
+      enabled: () => !this.drawEnabled,
+      touchPanEnabled: () => this.touchNavigationSettings().singleTouchMode === "touch",
       scrollRoot: () => adapter.scrollElement(),
       withinTarget: (target) => {
         if (!(target instanceof Element)) return false;
@@ -262,6 +306,22 @@ export class ViewerInkSession {
       const classes = [...target.classList].slice(0, 3).join(".");
       return classes ? `${tag}.${classes}` : tag;
     };
+    const routeDrawModePen = (event: Event): void => {
+      const pointer = event as PointerEvent;
+      if (!this.drawEnabled || pointer.pointerType !== "pen" || !within(pointer.target)) return;
+      const surface = this.surfaceForPointerTarget(pointer.target);
+      if (!surface?.router) return;
+      pointer.preventDefault();
+      pointer.stopImmediatePropagation();
+      surface.router.routePointer(pointer);
+    };
+    const win = doc.defaultView;
+    if (win) {
+      const penOptions = { capture: true, passive: false, signal: this.pointerProbeAbort.signal };
+      for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel"] as const) {
+        win.addEventListener(type, routeDrawModePen, penOptions);
+      }
+    }
     doc.addEventListener("pointerdown", (e: PointerEvent) => {
       this.logger.pointerSeen({
         source: "pointerdown",
@@ -339,6 +399,14 @@ export class ViewerInkSession {
     }
   }
 
+  private surfaceForPointerTarget(target: EventTarget | null): PageSurface | null {
+    if (!(target instanceof Element)) return null;
+    for (const surface of this.surfaces.values()) {
+      if (surface.page.element.contains(target)) return surface;
+    }
+    return null;
+  }
+
   private scheduleRefresh(reason: string, repaintOnly = false): void {
     if (this.destroyed) return;
     if (repaintOnly) {
@@ -374,13 +442,17 @@ export class ViewerInkSession {
     if (this.destroyed) return;
     const now = performance.now();
     this.lastZoomSignalAt = now;
-    if (!this.zoomBurstStartedAt || now - this.zoomBurstStartedAt > ViewerInkSession.ZOOM_ACTIVE_MS) {
-      this.zoomBurstStartedAt = now;
-      this.zoomTickCount = 0;
-      this.zoomBurstScaleStart = scale ?? null;
+    if (!this.zoomBurst.startedAt || now - this.zoomBurst.startedAt > ViewerInkSession.ZOOM_ACTIVE_MS) {
+      this.zoomBurst = {
+        startedAt: now,
+        tickCount: 0,
+        scaleStart: scale ?? null,
+        scaleEnd: null,
+        reason
+      };
     }
-    this.zoomTickCount += 1;
-    this.zoomBurstReason = reason;
+    this.zoomBurst.tickCount += 1;
+    this.zoomBurst.reason = reason;
     // Only freeze ink bitmap during real zoom/rotation — pages-dom storms must keep repainting.
     if (ViewerInkSession.shouldCompositeDuring(reason) && !this.zoomCompositing) {
       this.beginZoomCompositing();
@@ -389,32 +461,26 @@ export class ViewerInkSession {
     if (this.zoomCompositing) this.syncZoomOverlayLayouts();
     this.refreshSurfaceCursors();
     if (scale !== undefined) {
-      if (this.zoomBurstScaleStart === null) this.zoomBurstScaleStart = scale;
-      this.zoomBurstScaleEnd = scale;
+      if (this.zoomBurst.scaleStart === null) this.zoomBurst.scaleStart = scale;
+      this.zoomBurst.scaleEnd = scale;
     }
     this.logger.zoomTick({
       reason,
-      tick: this.zoomTickCount,
+      tick: this.zoomBurst.tickCount,
       ...(scale !== undefined ? { scale: Number(scale.toFixed(4)) } : {})
     });
     if (this.zoomSettleTimer !== null) window.clearTimeout(this.zoomSettleTimer);
     this.zoomSettleTimer = window.setTimeout(() => {
       this.zoomSettleTimer = null;
-      const burstTicks = this.zoomTickCount;
-      const burstDurationMs = roundMs(performance.now() - this.zoomBurstStartedAt);
-      const scaleStart = this.zoomBurstScaleStart;
-      const scaleEnd = this.zoomBurstScaleEnd;
-      this.zoomBurstStartedAt = 0;
-      this.zoomTickCount = 0;
-      this.zoomBurstScaleStart = null;
-      this.zoomBurstScaleEnd = null;
+      const burst = this.zoomBurst;
+      this.zoomBurst = { startedAt: 0, tickCount: 0, scaleStart: null, scaleEnd: null, reason: burst.reason };
       this.lastZoomSignalAt = 0;
       this.endZoomCompositing();
-      this.repaintSurfaces(this.zoomBurstReason, {
-        burstTicks,
-        burstDurationMs,
-        ...(scaleStart !== null ? { scaleStart } : {}),
-        ...(scaleEnd !== null ? { scaleEnd } : {})
+      this.repaintSurfaces(burst.reason, {
+        burstTicks: burst.tickCount,
+        burstDurationMs: roundMs(performance.now() - burst.startedAt),
+        ...(burst.scaleStart !== null ? { scaleStart: burst.scaleStart } : {}),
+        ...(burst.scaleEnd !== null ? { scaleEnd: burst.scaleEnd } : {})
       });
     }, ViewerInkSession.ZOOM_SETTLE_MS);
   }
@@ -529,6 +595,9 @@ export class ViewerInkSession {
         session.pageMetrics.set(page.page, { width: page.width, height: page.height });
       }
       for (const stroke of page.strokes) session.ink.add(stroke);
+      for (const text of page.texts ?? []) {
+        session.textAnnotations.set(page.page, [...(session.textAnnotations.get(page.page) ?? []), text]);
+      }
     }
     options.adapter.mountToolbar(session.toolbar.element, session.currentToolbarPlacement());
     session.logger.sessionAttach({
@@ -536,7 +605,6 @@ export class ViewerInkSession {
       panCapture: "document-capture",
       panBoundary: describeScrollElement(options.adapter.host),
       drawEnabled: session.drawEnabled,
-      mouseDragScroll: options.settings.mouseDragScroll,
       toolbarPlacement: session.currentToolbarPlacement(),
       loadedStrokes,
       sidecarStrokes,
@@ -594,7 +662,9 @@ export class ViewerInkSession {
       }
       for (const page of pages) {
         if (!this.surfaces.has(page.pageNumber)) this.surfaces.set(page.pageNumber, this.mountPage(page));
-        this.surfaces.get(page.pageNumber)?.router?.syncToolState();
+        const surface = this.surfaces.get(page.pageNumber);
+        surface?.page.element.classList.toggle("native-pdf-handwriting-draw-active", this.drawEnabled);
+        surface?.router?.syncToolState();
         this.renderPage(page.pageNumber);
       }
       for (const pageNumber of [...this.surfaces.keys()]) {
@@ -613,11 +683,13 @@ export class ViewerInkSession {
   }
 
   private ensureSelectionToolbar(options?: { resetPlacement?: boolean }): void {
-    if (!this.selected.length || this.selectionPage === null) return;
+    const count = this.selected.length + this.selectedTexts.length;
+    if (!count || this.selectionPage === null) return;
     if (options?.resetPlacement) this.selectionToolbar.resetPlacement();
     const anchor = this.autoToolbarAnchor();
-    this.selectionToolbar.show(this.selected.length, anchor);
+    this.selectionToolbar.show(count, anchor);
     this.selectionToolbar.reposition(anchor);
+    this.toolbar.refresh();
   }
 
   private autoToolbarAnchor(): ViewportPoint {
@@ -629,6 +701,12 @@ export class ViewerInkSession {
     };
     const surface = this.selectionPage ? this.surfaces.get(this.selectionPage) : undefined;
     if (!surface || !this.selectionShape) return defaultAnchor;
+
+    const editor = this.activeTextEditor;
+    if (editor?.annotationId && editor.page === this.selectionPage) {
+      const point = this.mapper(surface).toViewport(editor.point);
+      return { x: point.x - 140, y: point.y - 56 };
+    }
 
     const bounds = shapeBounds(this.selectionShape);
     const mapper = this.mapper(surface);
@@ -684,7 +762,7 @@ export class ViewerInkSession {
       this.detachCheckTimer = null;
     }
 
-    if (this.isZoomGestureActive() && ViewerInkSession.shouldCompositeDuring(this.zoomBurstReason)) {
+    if (this.isZoomGestureActive() && ViewerInkSession.shouldCompositeDuring(this.zoomBurst.reason)) {
       this.scheduleZoomRepaint(`pages-${reason}`, this.options.adapter.getViewState().scale);
       return;
     }
@@ -796,7 +874,7 @@ export class ViewerInkSession {
     try {
       await this.saveCoordinator.manualSave();
       this.toolbar.setSaveStatus("saved", new Date());
-      this.options.notice("Annotations saved.");
+      this.options.notice("Annotations saved in the sidecar. Export PDF to use them in another viewer.");
     } catch (error) {
       this.toolbar.setSaveStatus("failed");
       this.options.notice(`Save failed: ${this.errorMessage(error)}`);
@@ -907,7 +985,15 @@ export class ViewerInkSession {
   }
 
   handleKeyDown(event: KeyboardEvent): boolean {
-    if (this.destroyed || shouldIgnoreSelectionShortcut(event.target)) return false;
+    if (this.destroyed) return false;
+    const editor = this.activeTextEditor;
+    if (editor && this.isTextEditorCommitShortcut(event) && event.target instanceof Node && this.isTextEditorNode(editor.input, event.target)) {
+      event.preventDefault();
+      event.stopPropagation();
+      editor.commit();
+      return true;
+    }
+    if (shouldIgnoreSelectionShortcut(event.target)) return false;
     const historyAction = parseHistoryShortcut(event);
     if (historyAction) {
       const ok = historyAction === "undo" ? this.history.undo() : this.history.redo();
@@ -942,16 +1028,20 @@ export class ViewerInkSession {
     else if (action === "delete") this.deleteSelection();
   }
 
-  async exportCopy(): Promise<void> {
+  async exportCopy(mode: PdfExportMode = "flattened"): Promise<void> {
     await this.autosave.flush(this.identity.id);
     const bytes = await this.exporter.export({
       sourceBytes: await this.options.readSourcePdf(),
       getStrokes: () => this.ink.all(),
-      pageMetrics: this.exportPageMetrics()
+      getTexts: () => [...this.textAnnotations.values()].flat(),
+      pageMetrics: this.exportPageMetrics(),
+      mode
     });
-    const name = annotatedFilename(this.options.pdfPath.split("/").pop() ?? "document.pdf");
+    const sourceName = this.options.pdfPath.split("/").pop() ?? "document.pdf";
+    const name = mode === "editable" ? editableAnnotatedFilename(sourceName) : annotatedFilename(sourceName);
     const path = await this.options.writeExport(name, bytes);
-    this.options.notice(`Exported ${typeof path === "string" ? path : name}. Original PDF unchanged.`);
+    const exportType = mode === "editable" ? "editable annotations" : "flattened ink";
+    this.options.notice(`Exported ${typeof path === "string" ? path : name} with ${exportType}. Original PDF unchanged.`);
   }
 
   async destroy(options: { silent?: boolean; alreadyPersisted?: boolean } = {}): Promise<boolean> {
@@ -994,11 +1084,6 @@ export class ViewerInkSession {
       }
     }
     this.destroyed = true;
-    if (this.laserFadeFrame !== null) {
-      window.cancelAnimationFrame(this.laserFadeFrame);
-      this.laserFadeFrame = null;
-    }
-    this.laserTrails = [];
     if (this.resizeFrame !== null) {
       window.cancelAnimationFrame(this.resizeFrame);
       this.resizeFrame = null;
@@ -1007,11 +1092,19 @@ export class ViewerInkSession {
       window.clearTimeout(this.zoomSettleTimer);
       this.zoomSettleTimer = null;
     }
+    if (this.laserFadeFrame !== null) {
+      window.cancelAnimationFrame(this.laserFadeFrame);
+      this.laserFadeFrame = null;
+    }
+    this.laserTrails.length = 0;
     this.cancelInkLayerUpgrades();
     this.endZoomCompositing();
     this.syncAnnotationCursorMode(false);
     this.resizeObserver?.disconnect();
-    for (const surface of this.surfaces.values()) surface.router?.destroy();
+    for (const surface of this.surfaces.values()) {
+      this.cancelStraighten(surface);
+      surface.router?.destroy();
+    }
     this.surfaces.clear();
     this.selectionToolbar.destroy();
     this.viewerMousePan.destroy();
@@ -1025,8 +1118,13 @@ export class ViewerInkSession {
   private syncAnnotationCursorMode(enabled = this.drawEnabled): void {
     const tool = this.options.settings.toolPreferences.activeTool;
     const hideNativeCursor = enabled
-      && (isInkDrawTool(tool) || tool === "eraser");
+      && (isDrawingTool(tool) || tool === "laser" || tool === "eraser");
+    this.options.adapter.root.classList.toggle("native-pdf-handwriting-draw-active", enabled);
     this.options.adapter.root.classList.toggle("native-pdf-handwriting-hide-native-cursor", hideNativeCursor);
+  }
+
+  private activeDrawingTool(): DrawingTool {
+    return resolveDrawingTool(this.options.settings.toolPreferences.activeTool);
   }
 
   private refreshSurfaceCursors(): void {
@@ -1053,11 +1151,9 @@ export class ViewerInkSession {
   }
 
   private mousePanContext(reason?: string): Record<string, unknown> {
-    const mouseDragScroll = this.options.mouseDragScrollEnabled?.() ?? this.options.settings.mouseDragScroll;
     return {
       drawEnabled: this.drawEnabled,
-      mouseDragScroll,
-      panEnabled: !this.drawEnabled && mouseDragScroll,
+      panEnabled: !this.drawEnabled,
       scrollRoot: describeScrollElement(this.options.adapter.scrollElement()),
       ...(reason ? { reason } : {})
     };
@@ -1068,7 +1164,7 @@ export class ViewerInkSession {
     const overlay = this.options.adapter.mountOverlay(page.pageNumber);
     const canvas = overlay.ownerDocument.createElement("canvas");
     canvas.className = "native-pdf-handwriting-canvas";
-    canvas.setAttribute("aria-label", `Annotations for PDF page ${page.pageNumber}`);
+    this.setCanvasAccessibilityLabel(canvas, page.pageNumber, this.options.settings.hideStylusAnnotationLabel);
     overlay.append(canvas);
     const context = canvas.getContext("2d");
     if (!context) throw new Error("Canvas 2D rendering is unavailable");
@@ -1083,9 +1179,13 @@ export class ViewerInkSession {
       router: null,
       builder: undefined,
       laserDraft: false,
+      straightenTimer: null,
+      straightenAnchor: undefined,
       editPath: [],
       editTool: undefined,
-      eraserSize: undefined
+      textEditActive: false,
+      eraserSize: undefined,
+      eraserWholeStrokes: undefined
     };
     surface.router = this.createPageRouter(surface);
     this.ensurePagePositioning(page.element);
@@ -1093,23 +1193,40 @@ export class ViewerInkSession {
     return surface;
   }
 
+  private setCanvasAccessibilityLabel(canvas: HTMLCanvasElement, pageNumber: number, hidden: boolean): void {
+    if (hidden) canvas.removeAttribute("aria-label");
+    else canvas.setAttribute("aria-label", `Annotations for PDF page ${pageNumber}`);
+  }
+
+  private touchNavigationSettings(): TouchNavigationSettings {
+    return this.options.touchNavigationSettings?.() ?? this.options.settings;
+  }
+
   private createPageRouter(surface: PageSurface): PointerRouter {
     return new PointerRouter(surface.page.element, {
       activeTool: () => this.options.settings.toolPreferences.activeTool,
       drawingEnabled: () => this.drawEnabled,
+      onStylusEraser: () => this.selectStylusEraser(),
+      onStylusEraserEnd: () => this.restoreLastDrawingTool(),
+      onTextInput: (event) => this.openTextInput(surface, event),
+      rightMouseEraserEnabled: () => this.options.settings.toolPreferences.eraser.eraseWithRightMouseButton,
+      singleTouchMode: () => this.touchNavigationSettings().singleTouchMode,
+      twoFingerPinchZoomEnabled: () => this.touchNavigationSettings().twoFingerPinchZoom,
+      twoFingerSwipeScrollEnabled: () => this.touchNavigationSettings().twoFingerSwipeScroll,
       scrollRoot: () => null,
       cursorParent: () => surface.overlay,
       eraserCursorDiameter: () => this.options.settings.toolPreferences.eraser.size * this.displayScale(surface),
       drawCursorColor: () => {
-        const prefs = this.options.settings.toolPreferences;
-        if (prefs.activeTool === "laser") return prefs.laser.color;
-        return prefs[resolveDrawingTool(prefs.activeTool)].color;
+        const preferences = this.options.settings.toolPreferences;
+        return preferences.activeTool === "laser"
+          ? preferences.laser.color
+          : preferences[this.activeDrawingTool()].color;
       },
       projectCursor: (clientX, clientY) => this.projectInkScreenPoint(surface, clientX, clientY),
       onStart: (samples, route, event) => this.pointerStart(surface, samples, route, event),
       onMove: (samples, route, event) => this.pointerMove(surface, samples, route, event),
       onEnd: (samples, route, event) => this.pointerEnd(surface, samples, route, event),
-      onCancel: (_route, event) => this.pointerCancel(surface, event),
+      onCancel: (_route, event, reason) => this.pointerCancel(surface, event, reason),
       onRoute: (route, event) => {
         this.updateDebug(surface, event);
         this.logger.pointerRoute(route, {
@@ -1126,55 +1243,1021 @@ export class ViewerInkSession {
           clientY: Math.round(event.clientY)
         });
       },
+      onPinch: (factor, clientX, clientY) => this.zoomAroundPinch(factor, clientX, clientY),
+      onTwoFingerPan: (deltaX, deltaY) => this.scrollFromTwoFingerPan(deltaX, deltaY),
       onMousePan: (phase, _event, details) => this.logger.mousePan(phase, { page: surface.page.pageNumber, ...details })
+    }, undefined, surface.canvas);
+  }
+
+  private selectStylusEraser(): void {
+    const preferences = this.options.settings.toolPreferences;
+    this.toolbar.selectEraser();
+    void this.options.saveSettings(preferences);
+    this.refresh("stylus-eraser");
+  }
+
+  private restoreLastDrawingTool(): void {
+    const preferences = this.options.settings.toolPreferences;
+    this.toolbar.restoreLastDrawingTool();
+    void this.options.saveSettings(preferences);
+    this.refresh("stylus-eraser-end");
+  }
+
+  private scrollFromTwoFingerPan(deltaX: number, deltaY: number): void {
+    const root = this.options.adapter.scrollElement();
+    if (typeof root.scrollBy === "function") {
+      root.scrollBy(-deltaX, -deltaY);
+      return;
+    }
+    root.scrollLeft -= deltaX;
+    root.scrollTop -= deltaY;
+  }
+
+  private openTextInput(surface: PageSurface, event: PointerEvent, existing?: PdfTextAnnotation): void {
+    if (this.activeTextEditor) {
+      this.commitActiveTextInput();
+      this.clearSelection();
+      return;
+    }
+    if (!existing && (this.selected.length || this.selectedTexts.length)) this.clearSelection();
+    const point = existing ? { x: existing.x, y: existing.y } : this.toPdfPoint(surface, PointerCapabilities.sample(event), true);
+    const viewport = this.mapper(surface).toViewport(point);
+    const input = surface.overlay.ownerDocument.createElement("div");
+    input.className = "native-pdf-handwriting-text-input";
+    input.contentEditable = "true";
+    input.tabIndex = 0;
+    input.dataset.placeholder = "Text";
+    input.setAttribute("role", "textbox");
+    input.setAttribute("aria-multiline", "true");
+    input.style.left = `${viewport.x}px`;
+    input.style.top = `${viewport.y}px`;
+    const style = this.textStyle(existing);
+    input.style.color = style.color;
+    input.style.fontSize = `${style.fontSize * this.displayScale(surface)}px`;
+    input.style.fontFamily = style.fontFamily ?? "sans-serif";
+    input.style.fontWeight = style.bold ? "700" : "400";
+    input.style.fontStyle = style.italic ? "italic" : "normal";
+    const editor: ActiveTextEditor = {
+      input,
+      runs: this.textSourceRuns(existing, style),
+      composing: false,
+      point,
+      selectionStart: 0,
+      selectionEnd: 0,
+      style,
+      page: surface.page.pageNumber,
+      annotationId: existing?.id,
+      abort: new AbortController(),
+      commit: () => undefined,
+      preserveBlur: false,
+      cancelled: false,
+      cancelDialog: null,
+      drag: null
+    };
+    this.activeTextEditor = editor;
+    const rememberSelection = (): void => {
+      this.captureTextEditorSelection(editor);
+      this.toolbar.refresh();
+    };
+    const commit = (): void => {
+      if (editor.cancelled) return;
+      editor.cancelled = true;
+      editor.runs = this.readTextEditorRuns(editor);
+      const sourceRuns = this.trimTextRuns(editor.runs);
+      const sourceText = sourceRuns.map((run) => run.text).join("");
+      const runs = this.normalizeTextRuns(sourceRuns, sourceText, style);
+      const renderedText = runs.map((run) => run.text).join("");
+      editor.abort.abort();
+      editor.cancelDialog?.remove();
+      editor.cancelDialog = null;
+      input.remove();
+      if (this.activeTextEditor === editor) this.activeTextEditor = null;
+      if (!renderedText || this.isMarkdownDelimiterOnly(sourceText)) {
+        this.renderPage(surface.page.pageNumber);
+        return;
+      }
+      const now = new Date().toISOString();
+      const annotation: PdfTextAnnotation = {
+        id: existing?.id ?? this.id(), page: surface.page.pageNumber, text: renderedText, x: editor.point.x, y: editor.point.y,
+        color: style.color, fontSize: style.fontSize, fontFamily: style.fontFamily ?? "sans-serif",
+        bold: style.bold ?? false, italic: style.italic ?? false,
+        runs,
+        sourceRuns,
+        createdAt: existing?.createdAt ?? now, updatedAt: now
+      };
+      if (existing && annotation.text === existing.text &&
+          annotation.x === existing.x && annotation.y === existing.y &&
+          this.sameTextRuns(this.textRuns(existing, style), runs) &&
+          this.sameTextRuns(this.textSourceRuns(existing, style), sourceRuns)) {
+        this.renderPage(surface.page.pageNumber);
+        return;
+      }
+      this.history.execute({
+        label: existing ? "Edit text" : "Add text",
+        execute: () => existing ? this.replaceTextAnnotation(existing, annotation) : this.addTextAnnotation(annotation),
+        undo: () => existing ? this.replaceTextAnnotation(annotation, existing) : this.removeTextAnnotation(annotation)
+      });
+      this.refresh(existing ? "text-edit" : "text-add");
+    };
+    editor.commit = commit;
+    input.addEventListener("keydown", (keyEvent) => {
+      if (editor.composing || keyEvent.isComposing) return;
+      if (this.isTextEditorCommitShortcut(keyEvent)) {
+        keyEvent.preventDefault();
+        commit();
+      } else if (keyEvent.key === "Enter") {
+        keyEvent.preventDefault();
+        this.insertTextIntoEditor(editor, "\n");
+      }
+      if (keyEvent.key === "Escape") {
+        keyEvent.preventDefault();
+        this.requestCancelTextInput(editor);
+      }
     });
+    input.addEventListener("blur", () => {
+      const preserveBlur = editor.preserveBlur;
+      queueMicrotask(() => {
+        if (preserveBlur || editor.preserveBlur) {
+          if (this.activeTextEditor === editor && editor.input.isConnected) {
+            editor.preserveBlur = false;
+            editor.input.focus({ preventScroll: true });
+            this.setTextEditorSelection(editor, editor.selectionStart, editor.selectionEnd);
+          }
+          return;
+        }
+        const target = input.ownerDocument.activeElement;
+        if (target instanceof Element && target.closest(".native-pdf-handwriting-toolbar, .native-pdf-handwriting-dropdown, .native-pdf-handwriting-text-cancel-dialog")) return;
+        commit();
+      });
+    });
+    input.addEventListener("keyup", rememberSelection);
+    input.addEventListener("pointerup", rememberSelection);
+    input.ownerDocument.addEventListener("selectionchange", rememberSelection, { signal: editor.abort.signal });
+    input.addEventListener("beforeinput", (inputEvent) => {
+      if (editor.composing || inputEvent.isComposing) return;
+      if (inputEvent.inputType !== "insertText" || !inputEvent.data) return;
+      inputEvent.preventDefault();
+      this.insertTextIntoEditor(editor, inputEvent.data);
+    });
+    input.addEventListener("compositionstart", () => {
+      editor.composing = true;
+    });
+    input.addEventListener("compositionend", () => {
+      editor.composing = false;
+      queueMicrotask(() => {
+        if (this.activeTextEditor !== editor || !editor.input.isConnected || editor.composing) return;
+        editor.runs = this.readTextEditorRuns(editor);
+        rememberSelection();
+        this.renderTextEditor(editor);
+        this.setTextEditorSelection(editor, editor.selectionStart, editor.selectionEnd);
+      });
+    });
+    input.addEventListener("pointerdown", (pointerEvent) => this.startTextEditorDrag(editor, surface, pointerEvent));
+    input.addEventListener("pointermove", (pointerEvent) => this.moveTextEditorDrag(editor, surface, pointerEvent));
+    input.addEventListener("pointerup", (pointerEvent) => this.endTextEditorDrag(editor, pointerEvent));
+    input.addEventListener("pointercancel", (pointerEvent) => this.endTextEditorDrag(editor, pointerEvent));
+    input.addEventListener("input", () => {
+      editor.runs = this.readTextEditorRuns(editor);
+      rememberSelection();
+      if (editor.composing) return;
+      this.renderTextEditor(editor);
+      this.setTextEditorSelection(editor, editor.selectionStart, editor.selectionEnd);
+    });
+    surface.overlay.append(input);
+    this.renderTextEditor(editor);
+    input.focus();
+    const initialCaret = existing ? 0 : this.markdownEmphasisMarker(style).length;
+    this.setTextEditorSelection(editor, initialCaret, initialCaret);
+    if (existing) {
+      this.selectedTexts = [existing];
+      this.selectionPage = surface.page.pageNumber;
+      this.selectionShape = { type: "rectangle", bounds: this.textBounds(existing) };
+      this.ensureSelectionToolbar({ resetPlacement: true });
+    }
+    this.renderPage(surface.page.pageNumber);
+  }
+
+  private cancelActiveTextInput(editor = this.activeTextEditor): void {
+    if (!editor) return;
+    editor.cancelled = true;
+    editor.abort.abort();
+    editor.cancelDialog?.remove();
+    editor.cancelDialog = null;
+    editor.input.remove();
+    if (this.activeTextEditor === editor) this.activeTextEditor = null;
+    this.renderPage(editor.page);
+  }
+
+  private startTextEditorDrag(editor: ActiveTextEditor, surface: PageSurface, event: PointerEvent): void {
+    if (!editor.annotationId || event.button !== 0) return;
+    const rect = editor.input.getBoundingClientRect();
+    const border = 6;
+    const onBorder = event.clientX - rect.left <= border || rect.right - event.clientX <= border ||
+      event.clientY - rect.top <= border || rect.bottom - event.clientY <= border;
+    if (!onBorder) return;
+    event.preventDefault();
+    event.stopPropagation();
+    editor.drag = {
+      pointerId: event.pointerId,
+      start: this.toPdfPoint(surface, PointerCapabilities.sample(event), true),
+      origin: { ...editor.point }
+    };
+    editor.input.setPointerCapture?.(event.pointerId);
+  }
+
+  private moveTextEditorDrag(editor: ActiveTextEditor, surface: PageSurface, event: PointerEvent): void {
+    const drag = editor.drag;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const point = this.toPdfPoint(surface, PointerCapabilities.sample(event), true);
+    editor.point = { ...drag.origin, x: drag.origin.x + point.x - drag.start.x, y: drag.origin.y + point.y - drag.start.y };
+    const viewport = this.mapper(surface).toViewport(editor.point);
+    editor.input.style.left = `${viewport.x}px`;
+    editor.input.style.top = `${viewport.y}px`;
+    const annotation = this.textAnnotations.get(editor.page)?.find((item) => item.id === editor.annotationId);
+    if (annotation) this.selectionShape = { type: "rectangle", bounds: this.textBounds({ ...annotation, ...editor.point }) };
+    this.ensureSelectionToolbar();
+  }
+
+  private endTextEditorDrag(editor: ActiveTextEditor, event: PointerEvent): void {
+    if (!editor.drag || editor.drag.pointerId !== event.pointerId) return;
+    editor.drag = null;
+    if (editor.input.hasPointerCapture?.(event.pointerId)) editor.input.releasePointerCapture?.(event.pointerId);
+  }
+
+  setTextEscapeBehavior(skipConfirmation: boolean, action: PluginSettings["textEscapeAction"]): void {
+    this.options.settings.skipTextCancelConfirmation = skipConfirmation;
+    this.options.settings.textEscapeAction = skipConfirmation ? action ?? "discard" : null;
+  }
+
+  private requestCancelTextInput(editor = this.activeTextEditor): void {
+    if (!editor || editor.cancelled) return;
+    if (this.options.settings.skipTextCancelConfirmation) {
+      if (this.options.settings.textEscapeAction === "save") editor.commit();
+      else this.cancelActiveTextInput(editor);
+      return;
+    }
+    if (editor.cancelDialog) return;
+    const document = editor.input.ownerDocument;
+    const dialog = document.createElement("div");
+    dialog.className = "native-pdf-handwriting-text-cancel-dialog";
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute("aria-label", "Save text changes");
+    const content = document.createElement("div");
+    content.className = "native-pdf-handwriting-text-cancel-dialog-content";
+    const message = document.createElement("p");
+    message.textContent = "Save text changes?";
+    const option = document.createElement("label");
+    const remember = document.createElement("input");
+    remember.type = "checkbox";
+    option.append(remember, " Don't ask again");
+    const actions = document.createElement("div");
+    actions.className = "native-pdf-handwriting-text-cancel-dialog-actions";
+    const keepEditing = document.createElement("button");
+    keepEditing.type = "button";
+    keepEditing.dataset.action = "keep-editing";
+    keepEditing.textContent = "Keep editing";
+    const save = document.createElement("button");
+    save.type = "button";
+    save.dataset.action = "save";
+    save.textContent = "Save";
+    const discard = document.createElement("button");
+    discard.type = "button";
+    discard.dataset.action = "discard";
+    discard.textContent = "Discard";
+    const close = (): void => {
+      dialog.remove();
+      if (editor.cancelDialog === dialog) editor.cancelDialog = null;
+      if (this.activeTextEditor === editor && editor.input.isConnected) {
+        editor.input.focus({ preventScroll: true });
+        this.setTextEditorSelection(editor, editor.selectionStart, editor.selectionEnd);
+      }
+    };
+    keepEditing.addEventListener("click", close);
+    const rememberAction = (action: "save" | "discard"): void => {
+      if (!remember.checked) return;
+      this.options.settings.skipTextCancelConfirmation = true;
+      this.options.settings.textEscapeAction = action;
+      const persisted = this.options.savePluginSettings?.({
+        skipTextCancelConfirmation: true,
+        textEscapeAction: action
+      });
+      void persisted?.catch(() => undefined);
+    };
+    save.addEventListener("click", () => {
+      rememberAction("save");
+      editor.commit();
+    });
+    discard.addEventListener("click", () => {
+      rememberAction("discard");
+      this.cancelActiveTextInput(editor);
+    });
+    dialog.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close();
+      }
+    });
+    actions.append(keepEditing, save, discard);
+    content.append(message, option, actions);
+    dialog.append(content);
+    document.body.append(dialog);
+    editor.cancelDialog = dialog;
+    keepEditing.focus();
+  }
+
+  private commitActiveTextInput(): void {
+    this.activeTextEditor?.commit();
+  }
+
+  private isTextEditorCommitShortcut(event: KeyboardEvent): boolean {
+    return (event.ctrlKey || event.metaKey) && !event.altKey &&
+      (event.key === "Enter" || event.code === "NumpadEnter");
+  }
+
+  private preserveTextEditorSelection(): void {
+    const editor = this.activeTextEditor;
+    if (!editor) return;
+    this.captureTextEditorSelection(editor);
+    editor.preserveBlur = true;
+  }
+
+  private restoreTextEditorSelection(editor: ActiveTextEditor): void {
+    queueMicrotask(() => {
+      if (this.activeTextEditor !== editor || !editor.input.isConnected) return;
+      editor.preserveBlur = false;
+      editor.input.focus({ preventScroll: true });
+      this.setTextEditorSelection(editor, editor.selectionStart, editor.selectionEnd);
+    });
+  }
+
+  private addTextAnnotation(annotation: PdfTextAnnotation): void {
+    this.textAnnotations.set(annotation.page, [...(this.textAnnotations.get(annotation.page) ?? []), annotation]);
+  }
+
+  private removeTextAnnotation(annotation: PdfTextAnnotation): void {
+    this.textAnnotations.set(annotation.page, (this.textAnnotations.get(annotation.page) ?? []).filter((item) => item.id !== annotation.id));
+  }
+
+  private replaceTextAnnotation(before: PdfTextAnnotation, after: PdfTextAnnotation): void {
+    this.textAnnotations.set(before.page, (this.textAnnotations.get(before.page) ?? []).map((item) => item.id === before.id ? after : item));
+  }
+
+  private applyTextStyle(patch: Partial<TextStyle>): boolean {
+    const editor = this.activeTextEditor;
+    if (editor) {
+      this.captureTextEditorSelection(editor);
+      editor.style = { ...editor.style, ...patch };
+      this.updateTextEditorStyle(editor);
+      if (editor.selectionStart === editor.selectionEnd) {
+        this.restoreTextEditorSelection(editor);
+        return true;
+      }
+      const start = editor.selectionStart;
+      const end = editor.selectionEnd;
+      editor.runs = this.applyTextRunStyle(editor.runs, editor.selectionStart, editor.selectionEnd, patch);
+      this.renderTextEditor(editor);
+      this.setTextEditorSelection(editor, start, end);
+      this.restoreTextEditorSelection(editor);
+      return true;
+    }
+    return this.styleSelectedTextAnnotations(patch);
+  }
+
+  private activeTextSelectionFontSize(): { fontSize: number; mixed: boolean } | undefined {
+    const editor = this.activeTextEditor;
+    if (!editor) return undefined;
+    this.captureTextEditorSelection(editor);
+    if (editor.selectionStart === editor.selectionEnd) return undefined;
+    let position = 0;
+    let largest = 0;
+    const sizes = new Set<number>();
+    for (const run of this.previewMarkdownTextRuns(editor.runs)) {
+      const end = position + run.text.length;
+      if (editor.selectionStart < end && editor.selectionEnd > position) {
+        largest = Math.max(largest, run.fontSize);
+        sizes.add(run.fontSize);
+      }
+      position = end;
+    }
+    return largest > 0 ? { fontSize: largest, mixed: sizes.size > 1 } : undefined;
+  }
+
+  private updateTextEditorStyle(editor: ActiveTextEditor): void {
+    const surface = this.surfaces.get(editor.page);
+    if (!surface) return;
+    const style = editor.style;
+    editor.input.style.color = style.color;
+    editor.input.style.fontSize = `${style.fontSize * this.displayScale(surface)}px`;
+    editor.input.style.fontFamily = style.fontFamily ?? "sans-serif";
+    editor.input.style.fontWeight = style.bold ? "700" : "400";
+    editor.input.style.fontStyle = style.italic ? "italic" : "normal";
+  }
+
+  private insertTextMarkdownFormat(format: "bold" | "italic"): boolean {
+    const editor = this.activeTextEditor;
+    if (!editor) {
+      if (!this.selectedTexts.length) return false;
+      const selectedRuns = this.selectedTexts.flatMap((annotation) => this.textRuns(annotation, this.textStyle(annotation)));
+      return this.styleSelectedTextAnnotations({ [format]: !selectedRuns.every((run) => run[format]) });
+    }
+    this.captureTextEditorSelection(editor);
+    if (editor.selectionStart === editor.selectionEnd) {
+      const markerLength = this.markdownEmphasisMarkerLengthAtCaret(editor, format);
+      if (markerLength > 0) {
+        const start = editor.selectionStart;
+        editor.runs = this.mergeTextRuns([
+          ...this.sliceTextRuns(editor.runs, 0, start - markerLength),
+          ...this.sliceTextRuns(editor.runs, start + markerLength, Number.POSITIVE_INFINITY)
+        ]);
+        editor.selectionStart = start - markerLength;
+        editor.selectionEnd = start - markerLength;
+        this.renderTextEditor(editor);
+        this.setTextEditorSelection(editor, editor.selectionStart, editor.selectionEnd);
+        this.restoreTextEditorSelection(editor);
+        return true;
+      }
+      const marker = format === "bold" ? "**" : "*";
+      const start = editor.selectionStart;
+      const markerStyle = this.textRunAt(editor.runs, start) ?? this.textRun("", editor.style);
+      const before = this.sliceTextRuns(editor.runs, 0, start);
+      const after = this.sliceTextRuns(editor.runs, start, Number.POSITIVE_INFINITY);
+      editor.runs = this.mergeTextRuns([
+        ...before,
+        { ...markerStyle, text: marker },
+        { ...markerStyle, text: marker },
+        ...after
+      ]);
+      editor.selectionStart = start + marker.length;
+      editor.selectionEnd = start + marker.length;
+      this.renderTextEditor(editor);
+      this.setTextEditorSelection(editor, editor.selectionStart, editor.selectionEnd);
+      this.restoreTextEditorSelection(editor);
+      return true;
+    }
+    const marker = format === "bold" ? "**" : "*";
+    const start = editor.selectionStart;
+    const end = editor.selectionEnd;
+    const markerLength = this.markdownEmphasisMarkerLengthAroundSelection(editor, format);
+    if (markerLength > 0) {
+      editor.runs = this.mergeTextRuns([
+        ...this.sliceTextRuns(editor.runs, 0, start - markerLength),
+        ...this.sliceTextRuns(editor.runs, start, end),
+        ...this.sliceTextRuns(editor.runs, end + markerLength, Number.POSITIVE_INFINITY)
+      ]);
+      editor.selectionStart = start - markerLength;
+      editor.selectionEnd = end - markerLength;
+      this.renderTextEditor(editor);
+      this.setTextEditorSelection(editor, editor.selectionStart, editor.selectionEnd);
+      this.restoreTextEditorSelection(editor);
+      return true;
+    }
+    const markerStyle = this.textRunAt(editor.runs, start) ?? this.textRun("", editor.style);
+    const before = this.sliceTextRuns(editor.runs, 0, start);
+    const selected = this.sliceTextRuns(editor.runs, start, end);
+    const after = this.sliceTextRuns(editor.runs, end, Number.POSITIVE_INFINITY);
+    editor.runs = this.mergeTextRuns([
+      ...before,
+      { ...markerStyle, text: marker },
+      ...selected,
+      { ...markerStyle, text: marker },
+      ...after
+    ]);
+    editor.selectionStart = start + marker.length;
+    editor.selectionEnd = end + marker.length;
+    this.renderTextEditor(editor);
+    this.setTextEditorSelection(editor, editor.selectionStart, editor.selectionEnd);
+    this.restoreTextEditorSelection(editor);
+    return true;
+  }
+
+  private markdownEmphasisMarkerLengthAroundSelection(editor: ActiveTextEditor, format: "bold" | "italic"): number {
+    const text = editor.runs.map((run) => run.text).join("");
+    const countMarkers = (start: number, direction: -1 | 1): number => {
+      let count = 0;
+      for (let index = start; text[index] === "*"; index += direction) count += 1;
+      return count;
+    };
+    const before = countMarkers(editor.selectionStart - 1, -1);
+    const after = countMarkers(editor.selectionEnd, 1);
+    if (format === "bold") return before >= 2 && after >= 2 ? 2 : 0;
+    return (before === 1 && after === 1) || (before >= 3 && after >= 3) ? 1 : 0;
+  }
+
+  private markdownEmphasisMarkerLengthAtCaret(editor: ActiveTextEditor, format: "bold" | "italic"): number {
+    const text = editor.runs.map((run) => run.text).join("");
+    const countMarkers = (direction: -1 | 1): number => {
+      let count = 0;
+      for (let index = editor.selectionStart + (direction < 0 ? -1 : 0);
+        text[index] === "*";
+        index += direction) count += 1;
+      return count;
+    };
+    const before = countMarkers(-1);
+    const after = countMarkers(1);
+    if (format === "bold") return before >= 2 && after >= 2 ? 2 : 0;
+    return (before === 1 && after === 1) || (before >= 3 && after >= 3) ? 1 : 0;
+  }
+
+  private activeTextColor(): string | undefined {
+    const editor = this.activeTextEditor;
+    if (editor) {
+      this.captureTextEditorSelection(editor);
+      if (editor.selectionStart === editor.selectionEnd) return undefined;
+      let position = 0;
+      for (const run of editor.runs) {
+        if (editor.selectionStart < position + run.text.length) return run.color;
+        position += run.text.length;
+      }
+    }
+    return this.selectedTexts[0]?.color ?? this.selected[0]?.color;
+  }
+
+  private styleTextAnnotation(annotation: PdfTextAnnotation, patch: Partial<ToolPreferences["text"]>): PdfTextAnnotation {
+    const style = { ...this.textStyle(annotation), ...patch };
+    return {
+      ...annotation,
+      ...style,
+      runs: this.applyTextRunStyle(this.textRuns(annotation, style), 0, annotation.text.length, patch),
+      sourceRuns: this.applyTextRunStyle(
+        this.textSourceRuns(annotation, style),
+        0,
+        this.textSourceRuns(annotation, style).reduce((length, run) => length + run.text.length, 0),
+        patch
+      ),
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  private styleSelectedTextAnnotations(patch: Partial<ToolPreferences["text"]>): boolean {
+    if (!this.selectedTexts.length) return false;
+    const before = this.selectedTexts;
+    const after = before.map((annotation) => this.styleTextAnnotation(annotation, patch));
+    this.history.execute({
+      label: "Style selected text",
+      execute: () => before.forEach((annotation, index) => this.replaceTextAnnotation(annotation, after[index]!)),
+      undo: () => after.forEach((annotation, index) => this.replaceTextAnnotation(annotation, before[index]!))
+    });
+    this.selectedTexts = after;
+    if (after.length === 1) this.selectionShape = { type: "rectangle", bounds: this.textBounds(after[0]!) };
+    this.ensureSelectionToolbar();
+    return true;
+  }
+
+  private textStyle(annotation: PdfTextAnnotation | undefined, fallback = this.options.settings.toolPreferences.text): ToolPreferences["text"] {
+    return {
+      color: annotation?.color ?? fallback.color,
+      fontSize: annotation?.fontSize ?? fallback.fontSize,
+      fontFamily: annotation?.fontFamily ?? fallback.fontFamily,
+      bold: annotation?.bold ?? fallback.bold,
+      italic: annotation?.italic ?? fallback.italic
+    };
+  }
+
+  private textRun(text: string, style: ToolPreferences["text"]): PdfTextRun {
+    return {
+      text, color: style.color, fontSize: style.fontSize, fontFamily: style.fontFamily,
+      bold: style.bold, italic: style.italic, strikethrough: false
+    };
+  }
+
+  private textRuns(annotation: PdfTextAnnotation | undefined, fallback: ToolPreferences["text"]): PdfTextRun[] {
+    if (annotation?.runs?.length) return annotation.runs.map((run) => ({
+      ...run, strikethrough: run.strikethrough ?? false
+    }));
+    return [this.textRun(annotation?.text ?? "", this.textStyle(annotation, fallback))];
+  }
+
+  private textSourceRuns(annotation: PdfTextAnnotation | undefined, fallback: ToolPreferences["text"]): PdfTextRun[] {
+    if (annotation?.sourceRuns?.length) {
+      return annotation.sourceRuns.map((run) => ({
+        ...run, strikethrough: run.strikethrough ?? false
+      }));
+    }
+    return this.markdownSourceRuns(this.textRuns(annotation, fallback));
+  }
+
+  private markdownEmphasisMarker(style: Pick<PdfTextRun, "bold" | "italic">): string {
+    return style.bold && style.italic ? "***" : style.bold ? "**" : style.italic ? "*" : "";
+  }
+
+  private markdownSourceRuns(runs: readonly PdfTextRun[]): PdfTextRun[] {
+    const source: PdfTextRun[] = [];
+    for (const run of runs) {
+      const emphasis = this.markdownEmphasisMarker(run);
+      const prefix = `${run.strikethrough ? "~~" : ""}${emphasis}`;
+      const suffix = `${emphasis}${run.strikethrough ? "~~" : ""}`;
+      const style = { ...run, bold: false, italic: false, strikethrough: false };
+      if (prefix) source.push({ ...style, text: prefix });
+      source.push({ ...style, text: run.text });
+      if (suffix) source.push({ ...style, text: suffix });
+    }
+    return this.mergeTextRuns(source);
+  }
+
+  private applyTextRunStyle(
+    runs: readonly PdfTextRun[],
+    start: number,
+    end: number,
+    patch: Partial<ToolPreferences["text"]>
+  ): PdfTextRun[] {
+    let position = 0;
+    const styled: PdfTextRun[] = [];
+    for (const run of runs) {
+      const runStart = position;
+      const runEnd = position + run.text.length;
+      const selectedStart = Math.max(start, runStart);
+      const selectedEnd = Math.min(end, runEnd);
+      if (selectedStart >= selectedEnd) styled.push({ ...run });
+      else {
+        const before = run.text.slice(0, selectedStart - runStart);
+        const selected = run.text.slice(selectedStart - runStart, selectedEnd - runStart);
+        const after = run.text.slice(selectedEnd - runStart);
+        if (before) styled.push({ ...run, text: before });
+        if (selected) styled.push({ ...run, ...patch, text: selected });
+        if (after) styled.push({ ...run, text: after });
+      }
+      position = runEnd;
+    }
+    return this.mergeTextRuns(styled);
+  }
+
+  private normalizeTextRuns(
+    runs: readonly PdfTextRun[],
+    text: string,
+    fallback = this.options.settings.toolPreferences.text
+  ): PdfTextRun[] {
+    const trimmed = this.trimTextRuns(runs);
+    const normalized = trimmed.reduce((joined, run) => joined + run.text, "") === text
+      ? trimmed
+      : [this.textRun(text, fallback)];
+    return this.parseMarkdownTextRuns(normalized);
+  }
+
+  private isMarkdownDelimiterOnly(text: string): boolean {
+    return text.trim().length > 0 && /^[*_~\s]+$/.test(text);
+  }
+
+  private trimTextRuns(runs: readonly PdfTextRun[]): PdfTextRun[] {
+    const trimmed = this.mergeTextRuns(runs).map((run) => ({ ...run }));
+    while (trimmed[0]?.text) {
+      const text = trimmed[0].text.replace(/^\s+/, "");
+      if (text) {
+        trimmed[0].text = text;
+        break;
+      }
+      trimmed.shift();
+    }
+    while (trimmed.at(-1)?.text) {
+      const last = trimmed.at(-1)!;
+      const text = last.text.replace(/\s+$/, "");
+      if (text) {
+        last.text = text;
+        break;
+      }
+      trimmed.pop();
+    }
+    return this.mergeTextRuns(trimmed);
+  }
+
+  private parseMarkdownTextRuns(runs: readonly PdfTextRun[]): PdfTextRun[] {
+    return this.markdownTextRuns(runs, false);
+  }
+
+  private previewMarkdownTextRuns(runs: readonly PdfTextRun[]): PdfTextRun[] {
+    return this.markdownTextRuns(runs, true);
+  }
+
+  private markdownTextRuns(runs: readonly PdfTextRun[], retainMarkers: boolean): PdfTextRun[] {
+    const source = runs.map((run) => run.text).join("");
+    if (!source.includes("*") && !source.includes("_") && !source.includes("#") && !source.includes("~")) {
+      return this.mergeTextRuns(runs);
+    }
+    const characters: Array<{ text: string; style: PdfTextRun }> = [];
+    for (const run of runs) {
+      for (const text of run.text) characters.push({ text, style: run });
+    }
+    const parsed: PdfTextRun[] = [];
+    const append = (
+      text: string,
+      sourceIndex: number,
+      bold: boolean,
+      italic: boolean,
+      strikethrough: boolean,
+      headingLevel?: number
+    ): void => {
+      const style = characters[sourceIndex]?.style;
+      if (!style) return;
+      parsed.push({
+        ...style,
+        text,
+        bold: style.bold || bold,
+        italic: style.italic || italic,
+        strikethrough: style.strikethrough || strikethrough,
+        fontSize: headingLevel ? this.headingFontSize(style.fontSize, headingLevel) : style.fontSize
+      });
+    };
+    const appendMarker = (start: number, end: number): void => {
+      if (!retainMarkers) return;
+      for (let index = start; index < end; index += 1) append(source[index]!, index, false, false, false);
+    };
+    const parseRange = (
+      start: number,
+      end: number,
+      bold: boolean,
+      italic: boolean,
+      strikethrough: boolean,
+      headingLevel?: number
+    ): void => {
+      for (let index = start; index < end;) {
+        const heading = (index === 0 || source[index - 1] === "\n")
+          ? /^(#{1,6})[ \t]+/.exec(source.slice(index, end))
+          : null;
+        if (heading) {
+          const markerEnd = index + heading[0].length;
+          const lineEnd = source.indexOf("\n", markerEnd);
+          appendMarker(index, markerEnd);
+          parseRange(
+            markerEnd, lineEnd === -1 || lineEnd > end ? end : lineEnd,
+            true, italic, strikethrough, heading[1]!.length
+          );
+          index = lineEnd === -1 || lineEnd > end ? end : lineEnd;
+          continue;
+        }
+        const marker = ["***", "___", "**", "__", "~~", "*", "_"].find((candidate) => source.startsWith(candidate, index));
+        const closing = marker ? source.indexOf(marker, index + marker.length) : -1;
+        if (marker && closing > index + marker.length && closing < end) {
+          appendMarker(index, index + marker.length);
+          parseRange(
+            index + marker.length,
+            closing,
+            bold || marker.includes("**") || marker.includes("__"),
+            italic || marker.length === 1 || marker.length === 3,
+            strikethrough || marker === "~~",
+            headingLevel
+          );
+          appendMarker(closing, closing + marker.length);
+          index = closing + marker.length;
+          continue;
+        }
+        append(source[index]!, index, bold, italic, strikethrough, headingLevel);
+        index += 1;
+      }
+    };
+    parseRange(0, source.length, false, false, false);
+    return this.mergeTextRuns(parsed);
+  }
+
+  private headingFontSize(fontSize: number, level: number): number {
+    const scale = [1.7, 1.45, 1.25, 1.1, 1, 1][Math.min(level, 6) - 1] ?? 1;
+    return Math.round(fontSize * scale * 10) / 10;
+  }
+
+  private mergeTextRuns(runs: readonly PdfTextRun[]): PdfTextRun[] {
+    const merged: PdfTextRun[] = [];
+    for (const run of runs) {
+      const previous = merged.at(-1);
+        if (previous && previous.color === run.color && previous.fontSize === run.fontSize && previous.fontFamily === run.fontFamily &&
+          previous.bold === run.bold && previous.italic === run.italic &&
+          previous.strikethrough === run.strikethrough) previous.text += run.text;
+      else if (run.text) merged.push({ ...run });
+    }
+    return merged;
+  }
+
+  private sameTextRuns(left: readonly PdfTextRun[], right: readonly PdfTextRun[]): boolean {
+    return left.length === right.length && left.every((run, index) => {
+      const other = right[index];
+      return other !== undefined && run.text === other.text && run.color === other.color &&
+        run.fontSize === other.fontSize && run.fontFamily === other.fontFamily &&
+        run.bold === other.bold && run.italic === other.italic &&
+        run.strikethrough === other.strikethrough;
+    });
+  }
+
+  private renderTextEditor(editor: ActiveTextEditor): void {
+    const surface = this.surfaces.get(editor.page);
+    if (!surface) return;
+    editor.input.replaceChildren();
+    const previewRuns = this.previewMarkdownTextRuns(editor.runs);
+    let sourceRunIndex = 0;
+    let sourceOffset = 0;
+    for (const run of previewRuns) {
+      let remaining = run.text;
+      while (remaining) {
+        const source = editor.runs[sourceRunIndex];
+        if (!source) break;
+        const sourceRemaining = source.text.length - sourceOffset;
+        if (sourceRemaining <= 0) {
+          sourceRunIndex += 1;
+          sourceOffset = 0;
+          continue;
+        }
+        const text = remaining.slice(0, sourceRemaining);
+        this.appendTextEditorRun(editor.input, surface, text, run, source);
+        remaining = remaining.slice(text.length);
+        sourceOffset += text.length;
+        if (sourceOffset === source.text.length) {
+          sourceRunIndex += 1;
+          sourceOffset = 0;
+        }
+      }
+    }
+  }
+
+  private appendTextEditorRun(
+    input: HTMLDivElement,
+    surface: PageSurface,
+    text: string,
+    preview: PdfTextRun,
+    source: PdfTextRun
+  ): void {
+    if (!text) return;
+    const span = input.ownerDocument.createElement("span");
+    span.dataset.nativePdfHandwritingTextRun = "true";
+    span.dataset.color = source.color;
+    span.dataset.fontSize = String(source.fontSize);
+    span.dataset.fontFamily = source.fontFamily;
+    span.dataset.bold = String(source.bold);
+    span.dataset.italic = String(source.italic);
+    span.dataset.strikethrough = String(source.strikethrough);
+    span.style.color = preview.color;
+    span.style.fontSize = `${preview.fontSize * this.displayScale(surface)}px`;
+    span.style.fontFamily = preview.fontFamily;
+    span.style.fontWeight = preview.bold ? "700" : "400";
+    span.style.fontStyle = preview.italic ? "italic" : "normal";
+    span.style.textDecorationLine = preview.strikethrough ? "line-through" : "none";
+    span.textContent = text;
+    input.append(span);
+  }
+
+  private readTextEditorRuns(editor: ActiveTextEditor): PdfTextRun[] {
+    const runs: PdfTextRun[] = [];
+    const append = (node: Node, inherited: PdfTextRun): void => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        if (node.textContent) runs.push({ ...inherited, text: node.textContent });
+        return;
+      }
+      if (!(node instanceof HTMLElement)) return;
+      if (node.tagName === "BR") {
+        runs.push({ ...inherited, text: "\n" });
+        return;
+      }
+      const style = node.dataset.nativePdfHandwritingTextRun === "true"
+        ? {
+            text: "",
+            color: node.dataset.color ?? inherited.color,
+            fontSize: Number(node.dataset.fontSize) || inherited.fontSize,
+            fontFamily: node.dataset.fontFamily ?? inherited.fontFamily,
+            bold: node.dataset.bold === "true",
+            italic: node.dataset.italic === "true",
+            strikethrough: node.dataset.strikethrough === "true"
+          }
+        : inherited;
+      for (const child of node.childNodes) append(child, style);
+    };
+    const fallback = this.textRun("", editor.style);
+    for (const child of editor.input.childNodes) append(child, fallback);
+    return this.mergeTextRuns(runs);
+  }
+
+  private captureTextEditorSelection(editor: ActiveTextEditor): void {
+    const selection = editor.input.ownerDocument.getSelection();
+    if (!selection?.rangeCount) return;
+    const range = selection.getRangeAt(0);
+    if (!this.isTextEditorNode(editor.input, range.startContainer) || !this.isTextEditorNode(editor.input, range.endContainer)) return;
+    editor.selectionStart = this.textEditorOffset(editor.input, range.startContainer, range.startOffset);
+    editor.selectionEnd = this.textEditorOffset(editor.input, range.endContainer, range.endOffset);
+  }
+
+  private setTextEditorSelection(editor: ActiveTextEditor, start: number, end: number): void {
+    const selection = editor.input.ownerDocument.getSelection();
+    if (!selection) return;
+    const range = editor.input.ownerDocument.createRange();
+    const startPosition = this.textEditorPosition(editor.input, start);
+    const endPosition = this.textEditorPosition(editor.input, end);
+    range.setStart(startPosition.node, startPosition.offset);
+    range.setEnd(endPosition.node, endPosition.offset);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    editor.selectionStart = start;
+    editor.selectionEnd = end;
+  }
+
+  private isTextEditorNode(input: HTMLDivElement, node: Node): boolean {
+    return node === input || input.contains(node);
+  }
+
+  private textEditorOffset(input: HTMLDivElement, node: Node, offset: number): number {
+    const range = input.ownerDocument.createRange();
+    range.selectNodeContents(input);
+    range.setEnd(node, offset);
+    return range.toString().length;
+  }
+
+  private textEditorPosition(input: HTMLDivElement, offset: number): { node: Node; offset: number } {
+    const walker = input.ownerDocument.createTreeWalker(input, NodeFilter.SHOW_TEXT);
+    let remaining = Math.max(0, offset);
+    let last: Text | null = null;
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const text = node as Text;
+      if (remaining <= text.length) return { node: text, offset: remaining };
+      remaining -= text.length;
+      last = text;
+    }
+    if (last) return { node: last, offset: last.length };
+    return { node: input, offset: input.childNodes.length };
+  }
+
+  private insertTextIntoEditor(editor: ActiveTextEditor, text: string): void {
+    this.captureTextEditorSelection(editor);
+    const start = editor.selectionStart;
+    const end = editor.selectionEnd;
+    const before = this.sliceTextRuns(editor.runs, 0, start);
+    const after = this.sliceTextRuns(editor.runs, end, Number.POSITIVE_INFINITY);
+    editor.runs = this.mergeTextRuns([...before, { ...this.textRun("", editor.style), text }, ...after]);
+    editor.selectionStart = start + text.length;
+    editor.selectionEnd = start + text.length;
+    this.renderTextEditor(editor);
+    this.setTextEditorSelection(editor, editor.selectionStart, editor.selectionEnd);
+  }
+
+  private sliceTextRuns(runs: readonly PdfTextRun[], start: number, end: number): PdfTextRun[] {
+    const sliced: PdfTextRun[] = [];
+    let position = 0;
+    for (const run of runs) {
+      const from = Math.max(0, start - position);
+      const to = Math.min(run.text.length, end - position);
+      if (from < to) sliced.push({ ...run, text: run.text.slice(from, to) });
+      position += run.text.length;
+    }
+    return sliced;
+  }
+
+  private textRunAt(runs: readonly PdfTextRun[], offset: number): PdfTextRun | undefined {
+    let position = 0;
+    for (const run of runs) {
+      if (offset <= position + run.text.length) return run;
+      position += run.text.length;
+    }
+    return runs.at(-1);
   }
 
   private pointerStart(surface: PageSurface, samples: PointerSample[], route: "draw" | "edit", event: PointerEvent): void {
     const preferences = this.options.settings.toolPreferences;
-    // Selected ink: drag inside selection moves it even when a drawing tool is active.
-    if (this.tryStartSelectionMove(surface, samples[0]!)) {
+    const rightMouseEraser = event.pointerType === "mouse" && event.button === 2 && preferences.eraser.eraseWithRightMouseButton;
+    if (route === "edit" && preferences.activeTool === "lasso") {
+      if (this.activeTextEditor && event.target !== this.activeTextEditor.input) {
+        this.commitActiveTextInput();
+        this.clearSelection();
+        return;
+      }
+      const text = this.textAnnotationAt(surface, this.toPdfPoint(surface, samples[0]!, true));
+      if (text) {
+        const selected = this.selectionPage === surface.page.pageNumber && this.selectedTexts.some((item) => item.id === text.id);
+        if (selected) {
+          this.tryStartSelectionMove(surface, samples[0]!, text);
+          this.renderPage(surface.page.pageNumber);
+        } else {
+          this.selected = [];
+          this.selectedTexts = [text];
+          this.selectionPage = surface.page.pageNumber;
+          this.selectionShape = { type: "rectangle", bounds: this.textBounds(text) };
+          this.ensureSelectionToolbar({ resetPlacement: true });
+          this.renderPage(surface.page.pageNumber);
+        }
+        return;
+      }
+    }
+    // Selected ink: drag inside selection moves it even when pen/pencil is active.
+    if (!rightMouseEraser && this.tryStartSelectionMove(surface, samples[0]!)) {
       this.renderPage(surface.page.pageNumber);
       return;
     }
     if (route === "draw") {
-      const laser = preferences.activeTool === "laser";
-      if (laser) {
-        const laserPrefs = preferences.laser;
+      if (preferences.activeTool === "laser") {
+        const laser = preferences.laser;
         surface.laserDraft = true;
         surface.builder = new StrokeBuilder({
-          id: this.id(),
-          page: surface.page.pageNumber,
-          tool: "pen",
-          color: laserPrefs.color,
-          width: laserPrefs.width,
-          opacity: laserPrefs.opacity,
-          inputType: event.pointerType === "pen" ? "pen" : "mouse",
-          stabilization: "medium"
+          id: this.id(), page: surface.page.pageNumber, tool: "pen", color: laser.color,
+          width: laser.width, opacity: laser.opacity,
+          inputType: event.pointerType === "pen" ? "pen" : "mouse", stabilization: "medium"
         });
         for (const sample of samples) surface.builder.add(this.toPdfPoint(surface, sample, false));
-        const first = surface.builder.preview(true)[0];
-        if (first) {
-          this.lastPointerPdf = { x: first.x, y: first.y };
-          this.logDraw(surface, "start", "laser", [first]);
-        }
-        this.logPositionAlign(surface, samples[0]!, "start");
         this.ensureLaserFadeLoop();
       } else {
-        surface.laserDraft = false;
-        const tool = resolveDrawingTool(preferences.activeTool);
+        const tool = this.activeDrawingTool();
         const drawing = preferences[tool];
+        surface.laserDraft = false;
         surface.builder = new StrokeBuilder({
-          id: this.id(),
-          page: surface.page.pageNumber,
-          tool,
-          color: drawing.color,
-          width: drawing.width,
-          opacity: drawing.opacity,
-          inputType: event.pointerType === "pen" ? "pen" : "mouse",
-          stabilization: drawing.stabilization
+          id: this.id(), page: surface.page.pageNumber, tool, color: drawing.color,
+          width: drawing.width, opacity: drawing.opacity,
+          inputType: event.pointerType === "pen" ? "pen" : "mouse", stabilization: drawing.stabilization
         });
-        for (const sample of samples) surface.builder.add(this.toPdfPoint(surface, sample, drawing.simulateMousePressure));
+        const points = samples.map((sample) => this.toPdfPoint(surface, sample, drawing.simulateMousePressure));
+        for (const point of points) surface.builder.add(point);
+        this.scheduleStraighten(surface, points.at(-1));
         const first = surface.builder.preview(this.simplifyStrokesEnabled())[0];
         if (first) {
           this.lastPointerPdf = { x: first.x, y: first.y };
@@ -1189,8 +2272,9 @@ export class ViewerInkSession {
           this.clearSelection();
         }
       }
-      surface.editTool = preferences.activeTool === "eraser" ? "eraser" : "lasso";
+      surface.editTool = rightMouseEraser || preferences.activeTool === "eraser" ? "eraser" : "lasso";
       surface.eraserSize = surface.editTool === "eraser" ? preferences.eraser.size : undefined;
+      surface.eraserWholeStrokes = surface.editTool === "eraser" ? preferences.eraser.eraseWholeStrokes : undefined;
       surface.editPath = samples.map((sample) => this.toPdfPoint(surface, sample, true));
       if (surface.editPath[0]) this.lastPointerPdf = { x: surface.editPath[0].x, y: surface.editPath[0].y };
     }
@@ -1203,21 +2287,21 @@ export class ViewerInkSession {
       const dx = current.x - this.moveDrag.start.x;
       const dy = current.y - this.moveDrag.start.y;
       this.movePreview = translateStrokes(this.moveDrag.before, dx, dy);
+      this.moveTextPreview = this.translateTextAnnotations(this.moveDrag.beforeTexts, dx, dy);
       this.moveShapePreview = translateShape(this.moveDrag.beforeShape, dx, dy);
       this.updateDebug(surface, event);
       this.renderPage(surface.page.pageNumber);
       return;
     }
     if (route === "draw" && surface.builder) {
-      const simulate = surface.laserDraft
-        ? false
-        : this.options.settings.toolPreferences[
-          resolveDrawingTool(this.options.settings.toolPreferences.activeTool)
-        ].simulateMousePressure;
-      for (const sample of samples) surface.builder.add(this.toPdfPoint(surface, sample, simulate));
+      const tool = this.activeDrawingTool();
+      const simulate = surface.laserDraft ? false : this.options.settings.toolPreferences[tool].simulateMousePressure;
+      const points = samples.map((sample) => this.toPdfPoint(surface, sample, simulate));
+      this.addDrawPoints(surface, points);
+      if (!surface.laserDraft) this.scheduleStraighten(surface, points.at(-1));
+      else this.ensureLaserFadeLoop();
       const last = samples.at(-1);
       if (last) this.logPositionAlign(surface, last, "move");
-      if (surface.laserDraft) this.ensureLaserFadeLoop();
     } else if (route === "edit") {
       surface.editPath.push(...samples.map((sample) => this.toPdfPoint(surface, sample, true)));
     }
@@ -1226,67 +2310,66 @@ export class ViewerInkSession {
   }
 
   private pointerEnd(surface: PageSurface, samples: PointerSample[], route: "draw" | "edit", event: PointerEvent): void {
+    this.cancelStraighten(surface);
+    if (surface.textEditActive) {
+      surface.textEditActive = false;
+      return;
+    }
     if (this.moveDrag?.page === surface.page.pageNumber) {
+      const move = this.moveDrag;
       const current = this.toPdfPoint(surface, samples.at(-1)!, true);
-      const dx = current.x - this.moveDrag.start.x;
-      const dy = current.y - this.moveDrag.start.y;
+      const dx = current.x - move.start.x;
+      const dy = current.y - move.start.y;
       if (dx !== 0 || dy !== 0) {
-        const after = translateStrokes(this.moveDrag.before, dx, dy);
-        this.history.execute(new ReplaceStrokesCommand(this.ink, this.selected, after));
+        const after = translateStrokes(move.before, dx, dy);
+        const afterTexts = this.translateTextAnnotations(move.beforeTexts, dx, dy);
+        this.history.execute({
+          label: "Move selection",
+          execute: () => {
+            after.forEach((stroke) => this.ink.replace(stroke));
+            afterTexts.forEach((text, index) => this.replaceTextAnnotation(move.beforeTexts[index]!, text));
+          },
+          undo: () => {
+            move.before.forEach((stroke) => this.ink.replace(stroke));
+            move.beforeTexts.forEach((text, index) => this.replaceTextAnnotation(afterTexts[index]!, text));
+          }
+        });
         this.selected = after;
-        this.selectionShape = translateShape(this.moveDrag.beforeShape, dx, dy);
+        this.selectedTexts = afterTexts;
+        this.selectionShape = translateShape(move.beforeShape, dx, dy);
       }
       this.moveDrag = null;
       this.movePreview = null;
+      this.moveTextPreview = null;
       this.moveShapePreview = null;
+      if (dx === 0 && dy === 0 && move.openTextOnClick) this.openTextInput(surface, event, move.openTextOnClick);
       this.updateDebug(surface, event);
       this.renderPage(surface.page.pageNumber);
       return;
     }
     if (route === "draw" && surface.builder) {
       const laserDraft = surface.laserDraft;
-      const simulate = laserDraft
-        ? false
-        : this.options.settings.toolPreferences[
-          resolveDrawingTool(this.options.settings.toolPreferences.activeTool)
-        ].simulateMousePressure;
-      for (const sample of samples) surface.builder.add(this.toPdfPoint(surface, sample, simulate));
-      // Match live preview geometry — finish()+simplify reshapes the path → visible snap.
-      const stroke = surface.builder.finishMatchingPreview(
-        laserDraft ? true : this.simplifyStrokesEnabled()
-      );
-      surface.builder = undefined;
-      surface.laserDraft = false;
+      const tool = this.activeDrawingTool();
+      const simulate = laserDraft ? false : this.options.settings.toolPreferences[tool].simulateMousePressure;
+      this.addDrawPoints(surface, samples.map((sample) => this.toPdfPoint(surface, sample, simulate)));
+      const stroke = surface.builder.finishMatchingPreview(laserDraft ? true : this.simplifyStrokesEnabled());
       if (laserDraft) {
         const laser = this.options.settings.toolPreferences.laser;
-        this.laserTrails.push({
-          id: stroke.id,
-          page: stroke.page,
-          points: stroke.points,
-          color: laser.color,
-          width: laser.width,
-          opacity: laser.opacity,
-          holdMs: laser.holdMs,
-          fadeMs: laser.fadeMs
-        });
-        this.lastPointerPdf = stroke.points.at(-1)
-          ? { x: stroke.points.at(-1)!.x, y: stroke.points.at(-1)!.y }
-          : this.lastPointerPdf;
-        this.logDraw(surface, "end", "laser", stroke.points);
+        this.laserTrails.push({ id: stroke.id, page: stroke.page, points: stroke.points, color: laser.color, width: laser.width, opacity: laser.opacity, holdMs: laser.holdMs, fadeMs: laser.fadeMs });
         this.ensureLaserFadeLoop();
       } else {
-        const tool = resolveDrawingTool(this.options.settings.toolPreferences.activeTool);
         this.history.execute(new AddStrokeCommand(this.ink, stroke));
-        this.lastPointerPdf = stroke.points.at(-1)
-          ? { x: stroke.points.at(-1)!.x, y: stroke.points.at(-1)!.y }
-          : this.lastPointerPdf;
-        this.logDraw(surface, "end", tool, stroke.points);
       }
+      this.lastPointerPdf = stroke.points.at(-1) ? { x: stroke.points.at(-1)!.x, y: stroke.points.at(-1)!.y } : this.lastPointerPdf;
+      this.logDraw(surface, "end", laserDraft ? "laser" : tool, stroke.points);
       const last = samples.at(-1);
       if (last) this.logPositionAlign(surface, last, "end");
+      surface.builder = undefined;
+      surface.laserDraft = false;
+      surface.straightenAnchor = undefined;
     } else if (route === "edit") {
       surface.editPath.push(...samples.map((sample) => this.toPdfPoint(surface, sample, true)));
-      const tool = this.options.settings.toolPreferences.activeTool;
+      const tool = surface.editTool ?? this.options.settings.toolPreferences.activeTool;
       const phase = tool === "eraser" ? "eraser" : "lasso";
       const path = [...surface.editPath];
       this.finishEdit(surface);
@@ -1297,16 +2380,63 @@ export class ViewerInkSession {
     this.renderPage(surface.page.pageNumber);
   }
 
-  private pointerCancel(surface: PageSurface, event: PointerEvent): void {
+  private addDrawPoints(surface: PageSurface, points: PdfPoint[]): void {
+    const builder = surface.builder;
+    if (!builder || points.length === 0) return;
+    const last = points.at(-1)!;
+    if (builder.isStraightened() && surface.straightenAnchor && this.isStraightenJitter(last, surface.straightenAnchor)) return;
+    if (builder.updateStraightenedEndpoint(last)) {
+      surface.straightenAnchor = last;
+      return;
+    }
+    for (const point of points) builder.add(point);
+  }
+
+  private scheduleStraighten(surface: PageSurface, point: PdfPoint | undefined): void {
+    if (!this.options.settings.holdToStraighten || !surface.builder) return;
+    if (surface.builder.isStraightened()) return;
+    if (point && surface.straightenAnchor && this.isStraightenJitter(point, surface.straightenAnchor)) return;
+    this.cancelStraighten(surface);
+    surface.straightenAnchor = point;
+    surface.straightenTimer = window.setTimeout(() => {
+      surface.straightenTimer = null;
+      if (!this.options.settings.holdToStraighten || !surface.builder?.straighten()) return;
+      this.renderPage(surface.page.pageNumber);
+    }, 1000);
+  }
+
+  private cancelStraighten(surface: PageSurface): void {
+    if (surface.straightenTimer === null) return;
+    window.clearTimeout(surface.straightenTimer);
+    surface.straightenTimer = null;
+  }
+
+  private resetStraighten(surface: PageSurface): void {
+    this.cancelStraighten(surface);
+    surface.straightenAnchor = undefined;
+  }
+
+  private isStraightenJitter(point: PdfPoint, anchor: PdfPoint): boolean {
+    return Math.hypot(point.x - anchor.x, point.y - anchor.y) <= 4;
+  }
+
+  private pointerCancel(surface: PageSurface, event: PointerEvent, reason?: "multi-touch"): void {
     this.moveDrag = null;
     this.movePreview = null;
+    this.moveTextPreview = null;
     this.moveShapePreview = null;
+    this.resetStraighten(surface);
     surface.builder = undefined;
     surface.laserDraft = false;
     surface.editPath = [];
     surface.editTool = undefined;
+    surface.textEditActive = false;
     surface.eraserSize = undefined;
+    surface.eraserWholeStrokes = undefined;
     this.updateDebug(surface, event);
+    // A two-finger gesture immediately enters zoom compositing; rendering the cancelled
+    // one-finger preview here races that layout update and produces a visible flash.
+    if (reason === "multi-touch") return;
     this.renderPage(surface.page.pageNumber);
   }
 
@@ -1314,10 +2444,13 @@ export class ViewerInkSession {
     const preferences = this.options.settings.toolPreferences;
     const editTool = surface.editTool;
     const eraserSize = surface.eraserSize;
+    const eraserWholeStrokes = surface.eraserWholeStrokes;
     surface.editTool = undefined;
     surface.eraserSize = undefined;
+    surface.eraserWholeStrokes = undefined;
     if (editTool === "eraser" && eraserSize !== undefined) {
-      const result = eraseStrokes(this.ink.page(surface.page.pageNumber), surface.editPath, eraserSize, {
+      const erase = eraserWholeStrokes ? eraseWholeStrokes : eraseStrokes;
+      const result = erase(this.ink.page(surface.page.pageNumber), surface.editPath, eraserSize, {
         createFragmentId: () => this.id()
       });
       if (result.erased.length) {
@@ -1363,36 +2496,61 @@ export class ViewerInkSession {
         livePageHeight: surface.page.height
       });
     }
-    if (!this.selected.length) {
+    this.selectedTexts = (this.textAnnotations.get(surface.page.pageNumber) ?? []).filter((annotation) => this.textMatchesSelection(annotation, shape));
+    if (!this.selected.length && !this.selectedTexts.length) {
       this.clearSelection();
       return;
     }
     this.selectionShape = shape;
     this.selectionPage = surface.page.pageNumber;
     this.invalidateInkLayer(surface);
-    this.logger.lassoSelection(surface.page.pageNumber, this.selected.length, editPath.length, shape.type);
+    this.logger.lassoSelection(surface.page.pageNumber, this.selected.length + this.selectedTexts.length, editPath.length, shape.type);
     this.ensureSelectionToolbar({ resetPlacement: true });
   }
 
-  private tryStartSelectionMove(surface: PageSurface, sample: PointerSample): boolean {
-    if (!this.selectionShape || this.selectionPage !== surface.page.pageNumber || !this.selected.length) return false;
+  private tryStartSelectionMove(surface: PageSurface, sample: PointerSample, openTextOnClick?: PdfTextAnnotation): boolean {
+    if (!this.selectionShape || this.selectionPage !== surface.page.pageNumber || (!this.selected.length && !this.selectedTexts.length)) return false;
     const point = this.toPdfPoint(surface, sample, true);
     if (!shapeContainsPoint(this.selectionShape, point)) return false;
-    this.moveDrag = {
+    const move = {
       page: surface.page.pageNumber,
       start: point,
       before: this.selected.map((stroke) => structuredClone(stroke)),
-      beforeShape: structuredClone(this.selectionShape)
+      beforeTexts: this.selectedTexts.map((text) => structuredClone(text)),
+      beforeShape: structuredClone(this.selectionShape),
+      ...(openTextOnClick ? { openTextOnClick } : {})
     };
-    this.movePreview = this.moveDrag.before;
-    this.moveShapePreview = this.moveDrag.beforeShape;
+    this.moveDrag = move;
+    this.movePreview = move.before;
+    this.moveTextPreview = move.beforeTexts;
+    this.moveShapePreview = move.beforeShape;
     return true;
+  }
+
+  private translateTextAnnotations(texts: readonly PdfTextAnnotation[], dx: number, dy: number): PdfTextAnnotation[] {
+    const updatedAt = new Date().toISOString();
+    return texts.map((text) => ({ ...text, x: text.x + dx, y: text.y + dy, updatedAt }));
   }
 
   private deleteSelection(): void {
     this.reconcileSelection();
-    if (!this.selected.length) return;
-    this.history.execute(new DeleteStrokesCommand(this.ink, this.selected));
+    if (!this.selected.length && !this.selectedTexts.length) return;
+    if (this.activeTextEditor?.annotationId && this.selectedTexts.some((text) => text.id === this.activeTextEditor?.annotationId)) {
+      this.cancelActiveTextInput();
+    }
+    const strokes = [...this.selected];
+    const texts = [...this.selectedTexts];
+    this.history.execute({
+      label: "Delete selection",
+      execute: () => {
+        strokes.forEach((stroke) => this.ink.remove(stroke.id));
+        texts.forEach((text) => this.removeTextAnnotation(text));
+      },
+      undo: () => {
+        strokes.forEach((stroke) => this.ink.add(stroke));
+        texts.forEach((text) => this.addTextAnnotation(text));
+      }
+    });
     this.clearSelection();
   }
 
@@ -1427,31 +2585,59 @@ export class ViewerInkSession {
     this.selectionShape = boundingShapeFromStrokes(pasted);
     this.moveDrag = null;
     this.movePreview = null;
+    this.moveTextPreview = null;
     this.moveShapePreview = null;
     this.ensureSelectionToolbar({ resetPlacement: true });
     this.refresh("paste-selection");
   }
 
   private duplicateSelection(): void {
-    if (!this.selected.length) return;
+    if (this.activeTextEditor?.annotationId) this.commitActiveTextInput();
+    this.reconcileSelection();
+    if (!this.selected.length && !this.selectedTexts.length) return;
     const duplicates = translateStrokes(this.selected, 10, -10).map((stroke) => ({ ...stroke, id: this.id() }));
+    const now = new Date().toISOString();
+    const textDuplicates = this.selectedTexts.map((text) => ({
+      ...structuredClone(text), id: this.id(), x: text.x + 10, y: text.y - 10, createdAt: now, updatedAt: now
+    }));
     const command: Command = {
-      label: "Duplicate strokes",
-      execute: () => duplicates.forEach((stroke) => this.ink.add(stroke)),
-      undo: () => duplicates.forEach((stroke) => this.ink.remove(stroke.id))
+      label: "Duplicate selection",
+      execute: () => {
+        duplicates.forEach((stroke) => this.ink.add(stroke));
+        textDuplicates.forEach((text) => this.addTextAnnotation(text));
+      },
+      undo: () => {
+        duplicates.forEach((stroke) => this.ink.remove(stroke.id));
+        textDuplicates.forEach((text) => this.removeTextAnnotation(text));
+      }
     };
     this.history.execute(command);
     this.selected = duplicates;
-    this.selectionShape = boundingShapeFromStrokes(duplicates);
+    this.selectedTexts = textDuplicates;
+    this.selectionShape = duplicates.length
+      ? boundingShapeFromStrokes(duplicates)
+      : textDuplicates.length ? { type: "rectangle", bounds: this.textBounds(textDuplicates[0]!) } : null;
     this.ensureSelectionToolbar();
   }
 
-  private recolorSelection(color: string): void {
-    if (!this.selected.length) return;
+  private recolorSelection(color: string): boolean {
+    if (!this.selected.length) return false;
     const now = new Date().toISOString();
     const after = this.selected.map((stroke) => ({ ...stroke, color, updatedAt: now }));
     this.history.execute(new ReplaceStrokesCommand(this.ink, this.selected, after));
     this.selected = after;
+    this.toolbar.refresh();
+    return true;
+  }
+
+  private resizeSelection(width: number): boolean {
+    if (!this.selected.length) return false;
+    const now = new Date().toISOString();
+    const after = this.selected.map((stroke) => ({ ...stroke, width, updatedAt: now }));
+    this.history.execute(new ReplaceStrokesCommand(this.ink, this.selected, after));
+    this.selected = after;
+    this.toolbar.refresh();
+    return true;
   }
 
   private selectAllOnCurrentPage(): void {
@@ -1488,28 +2674,37 @@ export class ViewerInkSession {
 
   private clearSelection(): void {
     this.selected = [];
+    this.selectedTexts = [];
     this.selectionShape = null;
     this.selectionPage = null;
     this.moveDrag = null;
     this.movePreview = null;
+    this.moveTextPreview = null;
     this.moveShapePreview = null;
     this.selectionToolbar.hide();
+    this.toolbar.refresh();
     this.refresh("clear-selection");
   }
 
   private reconcileSelection(): void {
-    if (!this.selected.length || this.selectionPage === null) return;
+    if ((!this.selected.length && !this.selectedTexts.length) || this.selectionPage === null) return;
     const pageStrokes = this.ink.page(this.selectionPage);
     const byId = new Map(pageStrokes.map((stroke) => [stroke.id, stroke]));
     const synced = this.selected
       .map((stroke) => byId.get(stroke.id))
       .filter((stroke): stroke is InkStroke => stroke !== undefined);
-    if (!synced.length) {
+    const textsById = new Map((this.textAnnotations.get(this.selectionPage) ?? []).map((text) => [text.id, text]));
+    const syncedTexts = this.selectedTexts
+      .map((text) => textsById.get(text.id))
+      .filter((text): text is PdfTextAnnotation => text !== undefined);
+    if (!synced.length && !syncedTexts.length) {
       this.selected = [];
+      this.selectedTexts = [];
       this.selectionShape = null;
       this.selectionPage = null;
       this.moveDrag = null;
       this.movePreview = null;
+      this.moveTextPreview = null;
       this.moveShapePreview = null;
       this.selectionToolbar.hide();
       return;
@@ -1518,6 +2713,7 @@ export class ViewerInkSession {
       this.selected = synced;
       this.selectionShape = boundingShapeFromStrokes(synced) ?? this.selectionShape;
     }
+    this.selectedTexts = syncedTexts;
   }
 
   private invalidateInkLayer(surface: PageSurface): void {
@@ -1731,7 +2927,7 @@ export class ViewerInkSession {
 
     const storedStrokes = this.ink.page(pageNumber);
     const visibleStrokes = erasingLive
-      ? eraseStrokes(storedStrokes, surface.editPath, surface.eraserSize!).kept
+      ? (surface.eraserWholeStrokes ? eraseWholeStrokes : eraseStrokes)(storedStrokes, surface.editPath, surface.eraserSize!).kept
       : storedStrokes;
 
     const useLayerCache = canBlit && !erasingLive && !movingSelection;
@@ -1786,109 +2982,29 @@ export class ViewerInkSession {
     if (surface.builder?.preview().length) {
       if (surface.laserDraft) {
         const laser = this.options.settings.toolPreferences.laser;
-        this.paintLaserPoints(
-          surface,
-          surface.builder.preview(true),
-          laser.color,
-          laser.width,
-          laser.opacity,
-          laser.holdMs,
-          laser.fadeMs
-        );
+        this.paintLaserPoints(surface, surface.builder.preview(true), laser.color, laser.width, laser.opacity, laser.holdMs, laser.fadeMs);
       } else {
-        const tool = resolveDrawingTool(this.options.settings.toolPreferences.activeTool);
+        const tool = this.activeDrawingTool();
         const drawing = this.options.settings.toolPreferences[tool];
-        const draftId = surface.builder.id;
-        this.drawPoints(
-          surface,
-          surface.builder.preview(this.simplifyStrokesEnabled()),
-          drawing.color,
-          drawing.width,
-          drawing.opacity,
-          tool,
-          false,
-          draftId,
-          // Pencil: full grit while dragging so release does not densify/reseed.
-          tool === "pencil" ? "full" : "draft"
-        );
+        this.drawPoints(surface, surface.builder.preview(this.simplifyStrokesEnabled()), drawing.color, drawing.width, drawing.opacity, tool, false, undefined, "draft");
       }
     }
     this.paintLaserTrails(surface, pageNumber);
+    this.drawTextAnnotations(surface);
   }
 
-  private paintLaserPoints(
-    surface: PageSurface,
-    points: readonly PdfPoint[],
-    color: string,
-    width: number,
-    opacity: number,
-    holdMs: number,
-    fadeMs: number
-  ): void {
-    if (!points.length) return;
+  private paintLaserPoints(surface: PageSurface, points: readonly PdfPoint[], color: string, width: number, opacity: number, holdMs: number, fadeMs: number): void {
     const mapper = this.mapper(surface);
-    const scale = this.displayScale(surface);
     drawLaserStroke(surface.context, mapLaserPoints(points, (point) => mapper.toViewport(point)), {
-      color,
-      width: Math.max(1, width * scale),
-      opacity,
-      nowMs: performance.now(),
-      holdMs,
-      fadeMs
+      color, width: Math.max(1, width * this.displayScale(surface)), opacity,
+      nowMs: performance.now(), holdMs, fadeMs
     });
-    this.lastLaserPaintAt = performance.now();
   }
 
   private paintLaserTrails(surface: PageSurface, pageNumber: number): void {
     for (const trail of this.laserTrails) {
-      if (trail.page !== pageNumber) continue;
-      this.paintLaserPoints(
-        surface,
-        trail.points,
-        trail.color,
-        trail.width,
-        trail.opacity,
-        trail.holdMs,
-        trail.fadeMs
-      );
+      if (trail.page === pageNumber) this.paintLaserPoints(surface, trail.points, trail.color, trail.width, trail.opacity, trail.holdMs, trail.fadeMs);
     }
-  }
-
-  /** Blit cached ink + lasers only — avoids full committed-stroke rebuild every fade tick. */
-  private repaintLaserOverlay(pageNumber: number): void {
-    const surface = this.surfaces.get(pageNumber);
-    if (!surface) return;
-    if (!surface.inkLayerValid || !surface.inkLayer) {
-      this.renderPage(pageNumber);
-      return;
-    }
-    const rect = surface.overlay.getBoundingClientRect();
-    const layout = this.pageLayout(surface);
-    const width = Math.max(1, rect.width >= 8 ? rect.width : layout.contentWidth || 1);
-    const height = Math.max(1, rect.height >= 8 ? rect.height : layout.contentHeight || 1);
-    const { pixelWidth, pixelHeight, backingScale } = inkBackingSize(
-      width,
-      height,
-      window.devicePixelRatio || 1
-    );
-    // Must restore CSS-pixel transform after the identity blit — same as blitInkLayerToCanvas.
-    this.blitInkLayerToCanvas(surface, pixelWidth, pixelHeight, backingScale);
-    if (surface.builder?.preview().length && surface.laserDraft) {
-      const laser = this.options.settings.toolPreferences.laser;
-      this.paintLaserPoints(
-        surface,
-        surface.builder.preview(true),
-        laser.color,
-        laser.width,
-        laser.opacity,
-        laser.holdMs,
-        laser.fadeMs
-      );
-    } else if (surface.builder?.preview().length && !surface.laserDraft) {
-      this.renderPage(pageNumber);
-      return;
-    }
-    this.paintLaserTrails(surface, pageNumber);
   }
 
   private ensureLaserFadeLoop(): void {
@@ -1898,31 +3014,90 @@ export class ViewerInkSession {
     const tick = (now: number): void => {
       this.laserFadeFrame = null;
       if (this.destroyed) return;
-
-      const dirtyPages = new Set<number>();
-      for (const trail of this.laserTrails) dirtyPages.add(trail.page);
-      for (const surface of this.surfaces.values()) {
-        if (surface.laserDraft) dirtyPages.add(surface.page.pageNumber);
+      const pages = new Set(this.laserTrails.map((trail) => trail.page));
+      for (const surface of this.surfaces.values()) if (surface.laserDraft) pages.add(surface.page.pageNumber);
+      for (let index = this.laserTrails.length - 1; index >= 0; index -= 1) {
+        const trail = this.laserTrails[index]!;
+        if (!laserTrailStillVisible(trail.points, now, trail.holdMs, trail.fadeMs)) this.laserTrails.splice(index, 1);
       }
-
-      this.laserTrails = this.laserTrails.filter((trail) => {
-        dirtyPages.add(trail.page);
-        return laserTrailStillVisible(trail.points, now, trail.holdMs, trail.fadeMs);
-      });
-
-      // Skip if pointermove just painted (avoids double full-canvas work while dragging).
-      const recentlyPainted = now - this.lastLaserPaintAt < ViewerInkSession.LASER_FADE_MIN_MS;
-      if (!recentlyPainted) {
-        for (const page of dirtyPages) this.repaintLaserOverlay(page);
-      }
-
-      const stillActive = this.laserTrails.length > 0
-        || [...this.surfaces.values()].some((surface) => surface.laserDraft);
-      if (stillActive) {
+      for (const page of pages) this.renderPage(page, undefined, "laser-fade");
+      if (this.laserTrails.length > 0 || [...this.surfaces.values()].some((surface) => surface.laserDraft)) {
         this.laserFadeFrame = view.requestAnimationFrame(tick);
       }
     };
     this.laserFadeFrame = view.requestAnimationFrame(tick);
+  }
+
+  private drawTextAnnotations(surface: PageSurface): void {
+    const annotations = this.textAnnotations.get(surface.page.pageNumber) ?? [];
+    if (!annotations.length) return;
+    const mapper = this.mapper(surface);
+    const context = surface.context;
+    const scale = this.displayScale(surface);
+    context.save();
+    context.textBaseline = "top";
+    for (const storedAnnotation of annotations) {
+      const annotation = this.moveTextPreview?.find((item) => item.id === storedAnnotation.id) ?? storedAnnotation;
+      if (this.activeTextEditor?.page === surface.page.pageNumber && this.activeTextEditor.annotationId === annotation.id) continue;
+      const point = mapper.toViewport(annotation);
+      const runs = this.textRuns(annotation, this.options.settings.toolPreferences.text);
+      const fontSize = Math.max(8, annotation.fontSize * scale);
+      if (this.selectedTexts.some((text) => text.id === annotation.id)) {
+        const width = Math.max(...annotation.text.split("\n").map((line) => line.length * fontSize * 0.6), fontSize);
+        context.strokeStyle = "#2563eb";
+        context.lineWidth = 1;
+        context.setLineDash([4, 3]);
+        context.strokeRect(point.x - 3, point.y - 3, width + 6, annotation.text.split("\n").length * fontSize * 1.25 + 6);
+      }
+      let x = point.x;
+      let y = point.y;
+      let lineFontSize = fontSize;
+      for (const run of runs) {
+        const runSize = Math.max(8, run.fontSize * scale);
+        context.fillStyle = run.color;
+        context.font = `${run.italic ? "italic " : ""}${run.bold ? "700 " : ""}${runSize}px ${run.fontFamily}`;
+        for (const part of run.text.split(/(\n)/)) {
+          if (part === "\n") {
+            x = point.x;
+            y += lineFontSize * 1.25;
+            lineFontSize = runSize;
+          } else if (part) {
+            lineFontSize = Math.max(lineFontSize, runSize);
+            const width = context.measureText(part).width;
+            context.fillStyle = run.color;
+            context.fillText(part, x, y);
+            if (run.strikethrough) {
+              context.fillRect(x, y + runSize * 0.58, width, Math.max(1, runSize * 0.06));
+            }
+            x += width;
+          }
+        }
+      }
+    }
+    context.restore();
+  }
+
+  private textAnnotationAt(surface: PageSurface, point: PdfPoint): PdfTextAnnotation | undefined {
+    return (this.textAnnotations.get(surface.page.pageNumber) ?? []).find((annotation) => {
+      const bounds = this.textBounds(annotation);
+      return point.x >= bounds.minX && point.x <= bounds.maxX && point.y >= bounds.minY && point.y <= bounds.maxY;
+    });
+  }
+
+  private textMatchesSelection(annotation: PdfTextAnnotation, shape: SelectionShape): boolean {
+    const bounds = this.textBounds(annotation);
+    return [
+      { x: bounds.minX, y: bounds.minY }, { x: bounds.maxX, y: bounds.minY },
+      { x: bounds.minX, y: bounds.maxY }, { x: bounds.maxX, y: bounds.maxY },
+      { x: (bounds.minX + bounds.maxX) / 2, y: (bounds.minY + bounds.maxY) / 2 }
+    ].some((point) => shapeContainsPoint(shape, point));
+  }
+
+  private textBounds(annotation: PdfTextAnnotation): { minX: number; minY: number; maxX: number; maxY: number } {
+    const lines = annotation.text.split("\n");
+    const width = Math.max(...lines.map((line) => line.length * annotation.fontSize * 0.6), annotation.fontSize);
+    const height = Math.max(annotation.fontSize * 1.25, lines.length * annotation.fontSize * 1.25);
+    return { minX: annotation.x, minY: annotation.y - height, maxX: annotation.x + width, maxY: annotation.y };
   }
 
   private drawLassoPreview(surface: PageSurface): void {
@@ -1947,7 +3122,6 @@ export class ViewerInkSession {
     const context = surface.context;
     context.save();
     context.strokeStyle = "#2563eb";
-    context.fillStyle = "rgba(37, 99, 235, 0.12)";
     context.lineWidth = 2;
     context.setLineDash([6, 4]);
     context.globalAlpha = 0.95;
@@ -1962,7 +3136,7 @@ export class ViewerInkSession {
       context.beginPath();
       if (points.length === 1) {
         context.arc(first.x, first.y, 3, 0, Math.PI * 2);
-        context.fill();
+        context.stroke();
       } else {
         context.moveTo(first.x, first.y);
         for (const point of points.slice(1)) {
@@ -1971,7 +3145,6 @@ export class ViewerInkSession {
         }
         if (options.closeFreeform && points.length >= 3) {
           context.closePath();
-          context.fill();
         }
         context.stroke();
       }
@@ -1986,7 +3159,6 @@ export class ViewerInkSession {
     const height = bottomRight.y - topLeft.y;
     context.beginPath();
     context.rect(topLeft.x, topLeft.y, width, height);
-    context.fill();
     context.stroke();
     context.restore();
   }
@@ -2026,6 +3198,7 @@ export class ViewerInkSession {
     const context = surface.context;
     const scale = this.displayScale(surface);
     context.save();
+    if (selected) this.drawSelectedStrokeOutline(context, mapper, points, width, scale);
     if (tool === "pencil") {
       const prefs = this.options.settings.toolPreferences.pencil;
       const viewPoints = points.map((point) => {
@@ -2049,21 +3222,8 @@ export class ViewerInkSession {
         seed: strokeId ? seedFromId(strokeId) : seedFromId(`${viewPoints[0]!.x}:${viewPoints[0]!.y}`),
         quality: graphiteQuality
       });
-    } else if (tool === "highlighter") {
-      const prefs = this.options.settings.toolPreferences.highlighter;
-      const viewPoints = points.map((point) => {
-        const view = mapper.toViewport(point);
-        return { x: view.x, y: view.y, pressure: point.pressure };
-      });
-      drawHighlighterStroke(context, viewPoints, {
-        color,
-        width: Math.max(2, width * scale),
-        opacity,
-        pressureSensitivity: prefs.pressureSensitivity,
-        thinning: prefs.thinning
-      });
     } else {
-      const prefs = this.options.settings.toolPreferences.pen;
+      const prefs = this.options.settings.toolPreferences[tool];
       const viewPoints = points.map((point) => {
         const view = mapper.toViewport(point);
         return { x: view.x, y: view.y, pressure: point.pressure };
@@ -2077,23 +3237,30 @@ export class ViewerInkSession {
       });
     }
 
-    if (selected) {
-      context.globalAlpha = 0.9;
-      context.strokeStyle = "#2563eb";
-      context.lineWidth = Math.max(0.5, width * scale) + 4;
-      context.setLineDash([4, 3]);
-      context.lineCap = "round";
-      context.lineJoin = "round";
-      const first = mapper.toViewport(points[0]!);
-      context.beginPath();
-      context.moveTo(first.x, first.y);
-      for (const point of points.slice(1)) {
-        const view = mapper.toViewport(point);
-        context.lineTo(view.x, view.y);
-      }
-      context.stroke();
-    }
     context.restore();
+  }
+
+  private drawSelectedStrokeOutline(
+    context: CanvasRenderingContext2D,
+    mapper: PdfCoordinateMapper,
+    points: readonly PdfPoint[],
+    width: number,
+    scale: number
+  ): void {
+    context.globalAlpha = 0.65;
+    context.strokeStyle = "#2563eb";
+    context.lineWidth = Math.max(1, width * scale + 2);
+    context.setLineDash([4, 3]);
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    const first = mapper.toViewport(points[0]!);
+    context.beginPath();
+    context.moveTo(first.x, first.y);
+    for (const point of points.slice(1)) {
+      const view = mapper.toViewport(point);
+      context.lineTo(view.x, view.y);
+    }
+    context.stroke();
   }
 
   private toPdfPoint(surface: PageSurface, sample: PointerSample, simulateMousePressure: boolean): PdfPoint {
@@ -2248,11 +3415,13 @@ export class ViewerInkSession {
     const now = new Date().toISOString();
     const stored = new Map<number, InkStroke[]>();
     for (const stroke of this.ink.all()) stored.set(stroke.page, [...(stored.get(stroke.page) ?? []), stroke]);
+    const pageNumbers = new Set([...stored.keys(), ...this.textAnnotations.keys()]);
     const known = new Map(this.options.adapter.pages().map((page) => [page.pageNumber, page]));
     return {
       schemaVersion: 1,
       document: this.identity,
-      pages: [...stored.entries()].map(([pageNumber, strokes]) => {
+      pages: [...pageNumbers].map((pageNumber) => {
+        const strokes = stored.get(pageNumber) ?? [];
         const page = known.get(pageNumber);
         const metrics = this.pageMetrics.get(pageNumber) ?? {
           width: page?.width ?? 1,
@@ -2263,7 +3432,8 @@ export class ViewerInkSession {
           width: metrics.width,
           height: metrics.height,
           rotation: this.rotation(page?.rotation ?? 0),
-          strokes
+          strokes,
+          texts: this.textAnnotations.get(pageNumber) ?? []
         };
       }),
       createdAt: this.createdAt,
@@ -2362,6 +3532,19 @@ export class ViewerInkSession {
     this.options.adapter.mountToolbar(this.toolbar.element, this.currentToolbarPlacement());
   }
 
+  setStylusAnnotationLabelHidden(hidden: boolean): void {
+    for (const surface of this.surfaces.values()) {
+      this.setCanvasAccessibilityLabel(surface.canvas, surface.page.pageNumber, hidden);
+    }
+  }
+
+  setHoldToStraighten(enabled: boolean): void {
+    this.options.settings.holdToStraighten = enabled;
+    if (!enabled) {
+      for (const surface of this.surfaces.values()) this.resetStraighten(surface);
+    }
+  }
+
   /** False after PDF++ (or Obsidian) tears down the PDF DOM under this session. */
   isAttached(): boolean {
     if (this.destroyed || this.detachNotified) return false;
@@ -2377,16 +3560,37 @@ export class ViewerInkSession {
     return this.options.toolbarPlacement?.() ?? this.options.settings.toolbarPlacement ?? "main";
   }
 
+  private zoomAroundPinch(factor: number, clientX: number, clientY: number): void {
+    if (!Number.isFinite(factor) || factor <= 0 || Math.abs(factor - 1) < 0.001) return;
+    const adapter = this.options.adapter;
+    // PDF.js may resize its canvas synchronously inside the zoom call, before its
+    // scalechanging event reaches us. Freeze the prior ink bitmap first.
+    this.scheduleZoomRepaint("pinch-scalechanging", adapter.getViewState().scale);
+    const scrollRoot = adapter.scrollElement();
+    const rect = scrollRoot.getBoundingClientRect();
+    const origin: [number, number] = [clientX - rect.left, clientY - rect.top];
+    if (adapter.zoomByScaleFactor?.(factor, origin)) return;
+
+    const before = adapter.getViewState().scale;
+    const maxScale = adapter.maxScale?.() ?? Number.POSITIVE_INFINITY;
+    const after = Math.max(0.1, Math.min(maxScale, before * factor));
+    if (!adapter.setScale?.(after)) return;
+    const scaleRatio = after / before;
+    scrollRoot.scrollLeft = (scrollRoot.scrollLeft + origin[0]) * scaleRatio - origin[0];
+    scrollRoot.scrollTop = (scrollRoot.scrollTop + origin[1]) * scaleRatio - origin[1];
+  }
+
   private async handleMore(action: MoreAction): Promise<void> {
-    if (action === "export") {
-      await this.exportCopy().catch((error) => this.options.notice(`Export failed: ${this.errorMessage(error)}`));
+    if (action === "export-flattened" || action === "export-editable") {
+      const mode = action === "export-editable" ? "editable" : "flattened";
+      await this.exportCopy(mode).catch((error) => this.options.notice(`Export failed: ${this.errorMessage(error)}`));
       return;
     }
     if (action === "toolbar-main" || action === "toolbar-left" || action === "toolbar-right") {
       const placement = action.replace("toolbar-", "") as ToolbarPlacement;
       // Prefer savePluginSettings (assigns via saveSettings + remounts open leaves). Local mutate is fallback only.
       if (this.options.savePluginSettings) await this.options.savePluginSettings({ toolbarPlacement: placement });
-      else this.options.settings.toolbarPlacement = placement;
+      this.options.settings.toolbarPlacement = placement;
       this.remountToolbar();
     }
   }

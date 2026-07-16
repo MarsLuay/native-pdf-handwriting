@@ -4,7 +4,8 @@ import {
   clampPdfScale,
   computeTargetScale,
   installPdfZoomBoost,
-  OBSIDIAN_DEFAULT_MAX_SCALE
+  OBSIDIAN_DEFAULT_MAX_SCALE,
+  PINCH_RENDER_DELAY_MS
 } from "../src/integration/PdfZoomBoost";
 
 describe("pdf zoom boost", () => {
@@ -18,6 +19,32 @@ describe("pdf zoom boost", () => {
   it("computes step and factor targets like PDF.js", () => {
     expect(computeTargetScale(1, { steps: 1 })).toBe(1.1);
     expect(computeTargetScale(10, { scaleFactor: 1.2 })).toBe(12);
+  });
+
+  it("defers PDF.js rasterization while a touch pinch is moving", () => {
+    let scale = 1;
+    const updateScale = vi.fn((options: { scaleFactor?: number | null }) => {
+      scale = computeTargetScale(scale, options) ?? scale;
+    });
+    const viewer = {
+      get currentScale() {
+        return scale;
+      },
+      set currentScale(value: number) {
+        scale = value;
+      },
+      updateScale
+    };
+    const boost = installPdfZoomBoost(viewer);
+
+    expect(boost?.zoomByScaleFactor(1.2, [120, 240])).toBe(true);
+    expect(updateScale).toHaveBeenCalledWith({
+      scaleFactor: 1.2,
+      drawingDelay: PINCH_RENDER_DELAY_MS,
+      origin: [120, 240]
+    });
+
+    boost?.destroy();
   });
 
   it("lifts updateScale past Obsidian's hardcoded 10x clamp", () => {

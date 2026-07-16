@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { PointerRouter } from "../src/input/PointerRouter";
+import { isStylusEraserInput, PointerRouter } from "../src/input/PointerRouter";
 import type { ToolId } from "../src/model";
 
 function pointer(type: string, pointerId: number, extra: Record<string, unknown> = {}): PointerEvent {
@@ -49,8 +49,12 @@ describe("PointerRouter", () => {
     tool = "pen";
     const pen = pointer("pen", 3, { pressure: 0.8, tiltX: 12 });
     element.dispatchEvent(pen);
-    expect(pen.defaultPrevented).toBe(false);
+    expect(pen.defaultPrevented).toBe(true);
     expect(routes.at(-1)).toBe("native");
+
+    const penMove = pointer("pen", 3, { eventType: "pointermove" });
+    element.dispatchEvent(penMove);
+    expect(penMove.defaultPrevented).toBe(true);
 
     drawingEnabled = true;
     const sidecarPencil = pointer("mouse", 4, { pressure: 0.8, tiltX: 12 });
@@ -76,8 +80,341 @@ describe("PointerRouter", () => {
     element.dispatchEvent(second);
     expect(routes).toEqual(["touch-pan", "touch-zoom-pan"]);
     expect(first.defaultPrevented).toBe(false);
-    expect(second.defaultPrevented).toBe(false);
+    expect(second.defaultPrevented).toBe(true);
     router.destroy();
+  });
+
+  it("blocks one touch without annotation when the single-touch mode is None", () => {
+    const element = document.createElement("div");
+    const starts = vi.fn();
+    const routes: string[] = [];
+    const router = new PointerRouter(element, {
+      activeTool: () => "pen",
+      drawingEnabled: () => true,
+      singleTouchMode: () => "none",
+      onStart: starts,
+      onRoute: (route) => routes.push(route)
+    });
+    const touch = pointer("touch", 19);
+
+    element.dispatchEvent(touch);
+
+    expect(routes).toEqual(["touch-stylus"]);
+    expect(touch.defaultPrevented).toBe(true);
+    expect(starts).not.toHaveBeenCalled();
+    router.destroy();
+  });
+
+  it("routes one touch as the selected stylus tool and cancels it for a second touch", () => {
+    const element = document.createElement("div");
+    document.body.append(element);
+    Object.assign(element, { setPointerCapture: vi.fn(), hasPointerCapture: () => false });
+    const cancels = vi.fn();
+    const textInput = vi.fn();
+    const routes: string[] = [];
+    const router = new PointerRouter(element, {
+      activeTool: () => "text",
+      drawingEnabled: () => true,
+      singleTouchMode: () => "stylus",
+      onCancel: cancels,
+      onTextInput: textInput,
+      onRoute: (route) => routes.push(route)
+    });
+
+    const first = pointer("touch", 20);
+    const second = pointer("touch", 21);
+    element.dispatchEvent(first);
+    element.dispatchEvent(second);
+
+    expect(routes).toEqual(["text", "touch-zoom-pan"]);
+    expect(cancels).not.toHaveBeenCalled();
+    expect(textInput).toHaveBeenCalledWith(first);
+    expect(first.defaultPrevented).toBe(true);
+    expect(second.defaultPrevented).toBe(true);
+    router.destroy();
+  });
+
+  it("starts a Pen stroke from one touch when stylus touch mode is enabled", () => {
+    const element = document.createElement("div");
+    Object.assign(element, { setPointerCapture: vi.fn(), hasPointerCapture: () => false });
+    const starts = vi.fn();
+    const router = new PointerRouter(element, {
+      activeTool: () => "pen",
+      drawingEnabled: () => true,
+      singleTouchMode: () => "stylus",
+      onStart: starts
+    });
+
+    const touch = pointer("touch", 24, { pressure: 0.7 });
+    element.dispatchEvent(touch);
+
+    expect(touch.defaultPrevented).toBe(true);
+    expect(starts).toHaveBeenCalledWith(expect.any(Array), "draw", touch);
+    expect(starts.mock.calls[0]?.[0][0]).toMatchObject({ pointerType: "touch", pressure: 0.7 });
+    router.destroy();
+  });
+
+  it("keeps the native one-touch stream available for stylus routing", () => {
+    const parent = document.createElement("div");
+    const element = document.createElement("div");
+    parent.append(element);
+    document.body.append(parent);
+    const parentTouch = vi.fn();
+    parent.addEventListener("touchstart", parentTouch);
+    const router = new PointerRouter(element, {
+      activeTool: () => "pen",
+      drawingEnabled: () => true,
+      singleTouchMode: () => "stylus"
+    }, undefined, element);
+    const touchStart = new Event("touchstart", { bubbles: true, cancelable: true }) as TouchEvent;
+    Object.defineProperty(touchStart, "touches", { value: [{ clientX: 10, clientY: 20 }] });
+
+    element.dispatchEvent(touchStart);
+
+    expect(touchStart.defaultPrevented).toBe(false);
+    expect(parentTouch).not.toHaveBeenCalled();
+    router.destroy();
+  });
+
+  it("marks a started touch stroke as multi-touch cancelled when a second finger lands", () => {
+    const element = document.createElement("div");
+    Object.assign(element, { setPointerCapture: vi.fn(), hasPointerCapture: () => false });
+    const cancel = vi.fn();
+    const router = new PointerRouter(element, {
+      activeTool: () => "pen",
+      drawingEnabled: () => true,
+      singleTouchMode: () => "stylus",
+      onCancel: cancel
+    });
+    const first = pointer("touch", 25);
+    const second = pointer("touch", 26);
+
+    element.dispatchEvent(first);
+    element.dispatchEvent(second);
+
+    expect(cancel).toHaveBeenCalledWith("draw", second, "multi-touch");
+    router.destroy();
+  });
+
+  it("treats two-finger distance changes as pinch zoom without scrolling", () => {
+    const element = document.createElement("div");
+    const pan = vi.fn();
+    const pinch = vi.fn();
+    const router = new PointerRouter(element, {
+      activeTool: () => "pen",
+      drawingEnabled: () => true,
+      singleTouchMode: () => "stylus",
+      onPinch: pinch,
+      onTwoFingerPan: pan
+    }, undefined, element);
+    const touch = (type: string, firstX: number, secondX: number, y: number): TouchEvent => {
+      const event = new Event(type, { bubbles: true, cancelable: true }) as TouchEvent;
+      Object.defineProperty(event, "touches", { value: [{ clientX: firstX, clientY: y }, { clientX: secondX, clientY: y }] });
+      return event;
+    };
+
+    element.dispatchEvent(touch("touchstart", 0, 100, 0));
+    element.dispatchEvent(touch("touchmove", 10, 130, 20));
+
+    expect(pinch).toHaveBeenCalledWith(1.2, 70, 20);
+    expect(pan).not.toHaveBeenCalled();
+    router.destroy();
+  });
+
+  it("treats a parallel two-finger swipe as scrolling without zooming", () => {
+    const element = document.createElement("div");
+    const pan = vi.fn();
+    const pinch = vi.fn();
+    const router = new PointerRouter(element, {
+      activeTool: () => "pen",
+      drawingEnabled: () => true,
+      singleTouchMode: () => "stylus",
+      onPinch: pinch,
+      onTwoFingerPan: pan
+    }, undefined, element);
+    const touch = (type: string, firstX: number, secondX: number, y: number): TouchEvent => {
+      const event = new Event(type, { bubbles: true, cancelable: true }) as TouchEvent;
+      Object.defineProperty(event, "touches", { value: [{ clientX: firstX, clientY: y }, { clientX: secondX, clientY: y }] });
+      return event;
+    };
+
+    element.dispatchEvent(touch("touchstart", 0, 100, 0));
+    element.dispatchEvent(touch("touchmove", 20, 120, 20));
+
+    expect(pan).toHaveBeenCalledWith(20, 20, 70, 20);
+    expect(pinch).not.toHaveBeenCalled();
+    router.destroy();
+  });
+
+  it("respects disabled two-finger zoom and swipe settings", () => {
+    const element = document.createElement("div");
+    const pan = vi.fn();
+    const pinch = vi.fn();
+    const router = new PointerRouter(element, {
+      activeTool: () => "pen",
+      drawingEnabled: () => true,
+      singleTouchMode: () => "stylus",
+      twoFingerPinchZoomEnabled: () => false,
+      twoFingerSwipeScrollEnabled: () => false,
+      onPinch: pinch,
+      onTwoFingerPan: pan
+    }, undefined, element);
+    const touch = (type: string, firstX: number, secondX: number, y: number): TouchEvent => {
+      const event = new Event(type, { bubbles: true, cancelable: true }) as TouchEvent;
+      Object.defineProperty(event, "touches", { value: [{ clientX: firstX, clientY: y }, { clientX: secondX, clientY: y }] });
+      return event;
+    };
+
+    element.dispatchEvent(touch("touchstart", 0, 100, 0));
+    element.dispatchEvent(touch("touchmove", 10, 130, 20));
+
+    expect(pinch).not.toHaveBeenCalled();
+    expect(pan).not.toHaveBeenCalled();
+    router.destroy();
+  });
+
+  it("does not select the eraser or route pen input while drawing is disabled", () => {
+    const element = document.createElement("div");
+    document.body.append(element);
+    const selectEraser = vi.fn();
+    const starts = vi.fn();
+    const routes: string[] = [];
+    const router = new PointerRouter(element, {
+      activeTool: () => "pen",
+      drawingEnabled: () => false,
+      onStylusEraser: selectEraser,
+      onStart: starts,
+      onRoute: (route) => routes.push(route)
+    });
+
+    const stylus = pointer("pen", 22, { button: 5, buttons: 32 });
+    element.dispatchEvent(stylus);
+
+    expect(routes).toEqual(["native"]);
+    expect(starts).not.toHaveBeenCalled();
+    expect(selectEraser).not.toHaveBeenCalled();
+    router.destroy();
+  });
+
+  it("routes right mouse input to the eraser only when enabled", () => {
+    const element = document.createElement("div");
+    document.body.append(element);
+    Object.assign(element, { setPointerCapture: vi.fn(), hasPointerCapture: () => false });
+    let rightMouseEraser = false;
+    const routes: string[] = [];
+    const router = new PointerRouter(element, {
+      activeTool: () => "pen",
+      drawingEnabled: () => true,
+      rightMouseEraserEnabled: () => rightMouseEraser,
+      onRoute: (route) => routes.push(route)
+    });
+    const disabled = pointer("mouse", 31, { button: 2, buttons: 2 });
+    element.dispatchEvent(disabled);
+    expect(routes.at(-1)).toBe("native");
+    expect(disabled.defaultPrevented).toBe(false);
+
+    rightMouseEraser = true;
+    const enabled = pointer("mouse", 32, { button: 2, buttons: 2 });
+    element.dispatchEvent(enabled);
+    expect(routes.at(-1)).toBe("edit");
+    expect(enabled.defaultPrevented).toBe(true);
+    router.destroy();
+  });
+
+  it("selects and routes the stylus eraser tip as an edit", () => {
+    const element = document.createElement("div");
+    document.body.append(element);
+    Object.assign(element, { setPointerCapture: vi.fn(), hasPointerCapture: () => false });
+    let tool: ToolId = "pen";
+    const selected = vi.fn(() => { tool = "eraser"; });
+    const restored = vi.fn(() => { tool = "pencil"; });
+    const routes: string[] = [];
+    const router = new PointerRouter(element, {
+      activeTool: () => tool,
+      drawingEnabled: () => true,
+      onStylusEraser: selected,
+      onStylusEraserEnd: restored,
+      onRoute: (route) => routes.push(route)
+    });
+    const eraser = pointer("pen", 41, { button: 5, buttons: 32 });
+    expect(isStylusEraserInput(eraser)).toBe(true);
+    element.dispatchEvent(eraser);
+    expect(selected).toHaveBeenCalledOnce();
+    expect(tool).toBe("eraser");
+    expect(routes.at(-1)).toBe("edit");
+    expect(eraser.defaultPrevented).toBe(true);
+    element.dispatchEvent(pointer("pen", 41, { eventType: "pointerup", button: 5, buttons: 0 }));
+    expect(restored).toHaveBeenCalledOnce();
+    expect(tool).toBe("pencil");
+    router.destroy();
+  });
+
+  it("keeps draw-mode stylus events from reaching ancestor swipe handlers", () => {
+    const parent = document.createElement("div");
+    const element = document.createElement("div");
+    const overlay = document.createElement("div");
+    element.append(overlay);
+    parent.append(element);
+    document.body.append(parent);
+    Object.assign(element, { setPointerCapture: vi.fn(), hasPointerCapture: () => false });
+    const sidebarSwipe = vi.fn();
+    parent.addEventListener("pointerdown", sidebarSwipe);
+    parent.addEventListener("pointermove", sidebarSwipe);
+    const router = new PointerRouter(element, { activeTool: () => "pen", drawingEnabled: () => true });
+
+    overlay.dispatchEvent(pointer("pen", 22));
+    overlay.dispatchEvent(pointer("pen", 22, { eventType: "pointermove" }));
+
+    expect(sidebarSwipe).not.toHaveBeenCalled();
+    router.destroy();
+    parent.remove();
+  });
+
+  it("keeps draw-mode touch events from reaching ancestor gesture handlers", () => {
+    const parent = document.createElement("div");
+    const element = document.createElement("div");
+    const canvas = document.createElement("canvas");
+    element.append(canvas);
+    parent.append(element);
+    document.body.append(parent);
+    const quickAction = vi.fn();
+    parent.addEventListener("touchstart", quickAction);
+    parent.addEventListener("touchmove", quickAction);
+    const router = new PointerRouter(element, { activeTool: () => "pen", drawingEnabled: () => true }, undefined, canvas);
+
+    const touchStart = new Event("touchstart", { bubbles: true, cancelable: true });
+    const touchMove = new Event("touchmove", { bubbles: true, cancelable: true });
+    canvas.dispatchEvent(touchStart);
+    canvas.dispatchEvent(touchMove);
+
+    expect(touchStart.defaultPrevented).toBe(true);
+    expect(touchMove.defaultPrevented).toBe(true);
+    expect(quickAction).not.toHaveBeenCalled();
+    router.destroy();
+    parent.remove();
+  });
+
+  it("reports continuous scale factors and centers from a draw-mode two-finger pinch", () => {
+    const element = document.createElement("div");
+    const canvas = document.createElement("canvas");
+    element.append(canvas);
+    document.body.append(element);
+    const pinch = vi.fn();
+    const router = new PointerRouter(element, { activeTool: () => "pen", drawingEnabled: () => true, onPinch: pinch }, undefined, canvas);
+    const touch = (type: string, distance: number): TouchEvent => {
+      const event = new Event(type, { bubbles: true, cancelable: true }) as TouchEvent;
+      Object.defineProperty(event, "touches", { value: [{ clientX: 0, clientY: 0 }, { clientX: distance, clientY: 0 }] });
+      return event;
+    };
+
+    canvas.dispatchEvent(touch("touchstart", 100));
+    canvas.dispatchEvent(touch("touchmove", 120));
+    canvas.dispatchEvent(touch("touchmove", 90));
+
+    expect(pinch).toHaveBeenNthCalledWith(1, 1.2, 60, 0);
+    expect(pinch).toHaveBeenNthCalledWith(2, 0.75, 45, 0);
+    router.destroy();
+    element.remove();
   });
 
   it("delivers coalesced samples", () => {
@@ -237,6 +574,25 @@ describe("PointerRouter", () => {
       onStart
     });
     done.dispatchEvent(pointer("mouse", 6));
+    expect(onStart).not.toHaveBeenCalled();
+    router.destroy();
+  });
+
+  it("preserves native textarea drag selection while the lasso tool is active", () => {
+    const element = document.createElement("div");
+    const input = document.createElement("textarea");
+    input.className = "native-pdf-handwriting-text-input";
+    element.append(input);
+    document.body.append(element);
+    const onStart = vi.fn();
+    const router = new PointerRouter(element, {
+      activeTool: () => "lasso",
+      drawingEnabled: () => true,
+      onStart
+    });
+    const down = pointer("mouse", 7);
+    input.dispatchEvent(down);
+    expect(down.defaultPrevented).toBe(false);
     expect(onStart).not.toHaveBeenCalled();
     router.destroy();
   });
