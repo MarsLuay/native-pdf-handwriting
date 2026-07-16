@@ -63,7 +63,9 @@
 .native-pdf-handwriting-text-menu-button[aria-pressed="true"] { background: var(--interactive-accent, #2563eb); border-color: var(--interactive-accent, #2563eb); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent, #2563eb) 72%, #000); color: var(--text-on-accent, #fff); }
 .native-pdf-handwriting-text-menu-button[aria-pressed="true"]:hover { background: var(--interactive-accent-hover, #1d4ed8); }
 .native-pdf-handwriting-text-menu-button[data-option-id="text-italic"] { font-style: italic; }
-.native-pdf-handwriting-text-menu-size { color: var(--text-muted, #6b7280); text-align: center; }
+.native-pdf-handwriting-text-menu-size { align-items: center; color: var(--text-muted, #6b7280); display: flex; justify-content: center; text-align: center; }
+.native-pdf-handwriting-text-menu-size-input { background: transparent; border: 0; color: inherit; font: inherit; min-width: 0; outline: 0; padding: 0; text-align: right; width: 4.5em; }
+.native-pdf-handwriting-text-menu-size-input:focus { color: var(--text-normal, #111827); text-decoration: underline; }
 
 .native-pdf-handwriting-toolbar {
   --ink-control-size: 32px;

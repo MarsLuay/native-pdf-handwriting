@@ -3,7 +3,7 @@ import { DEFAULT_SETTINGS } from "../src/model";
 import { AnnotationToolbar } from "../src/ui/AnnotationToolbar";
 import { DropdownController } from "../src/ui/DropdownController";
 
-afterEach(() => { document.body.replaceChildren(); });
+afterEach(() => { document.body.replaceChildren(); document.body.removeAttribute("style"); });
 
 describe("DropdownController", () => {
   it("selects, closes, restores focus, and supports keyboard navigation", () => {
@@ -152,7 +152,19 @@ describe("AnnotationToolbar", () => {
   it("opens Text formatting controls when Text is clicked again", () => {
     const preferences = structuredClone(DEFAULT_SETTINGS.toolPreferences);
     const changed = vi.fn();
-    const toolbar = new AnnotationToolbar({ preferences, autosave: true, callbacks: { onPreferencesChange: changed }, ownerDocument: document });
+    document.body.style.setProperty("--font-interface", "Interface Font");
+    document.body.style.setProperty("--font-text", "Reading Font");
+    document.body.style.setProperty("--font-monospace", "Code Font");
+    const toolbar = new AnnotationToolbar({
+      preferences,
+      autosave: true,
+      callbacks: {
+        onPreferencesChange: changed,
+        selectedTextFontSize: () => selectedSize
+      },
+      ownerDocument: document
+    });
+    let selectedSize: { fontSize: number; mixed: boolean } | undefined = { fontSize: 27.2, mixed: true };
     document.body.append(toolbar.element);
     const text = toolbar.element.querySelector<HTMLButtonElement>("[data-control='text']");
     text?.click();
@@ -160,19 +172,33 @@ describe("AnnotationToolbar", () => {
     text?.click();
     const font = document.querySelector<HTMLSelectElement>(".native-pdf-handwriting-text-menu select");
     expect(font?.value).toBe("sans-serif");
+    expect([...font!.options].map((option) => option.value)).toEqual(expect.arrayContaining(["Interface Font", "Reading Font", "Code Font", "sans-serif"]));
     expect([...document.querySelectorAll<HTMLButtonElement>(".native-pdf-handwriting-text-menu-button")].map((button) => button.dataset.optionId))
       .toEqual(["text-size-decrease", "text-size-increase", "text-bold", "text-italic"]);
+    expect(document.querySelector<HTMLInputElement>(".native-pdf-handwriting-text-menu-size-input")?.value).toBe("27.2");
+    expect(document.querySelector(".native-pdf-handwriting-text-menu-size")?.textContent).toBe("px+");
+    selectedSize = { fontSize: 16, mixed: false };
+    toolbar.refresh();
+    expect(document.querySelector<HTMLInputElement>(".native-pdf-handwriting-text-menu-size-input")?.value).toBe("16");
+    expect(document.querySelector(".native-pdf-handwriting-text-menu-size")?.textContent).toBe("px");
     expect(document.querySelector<HTMLButtonElement>("[data-option-id='text-italic']")?.classList.contains("native-pdf-handwriting-text-menu-button")).toBe(true);
     document.querySelector<HTMLButtonElement>("[data-option-id='text-bold']")?.click();
     expect(preferences.text.bold).toBe(true);
     expect(document.querySelector<HTMLButtonElement>("[data-option-id='text-bold']")?.getAttribute("aria-pressed")).toBe("true");
     expect(document.querySelector(".native-pdf-handwriting-text-menu")).not.toBeNull();
     document.querySelector<HTMLButtonElement>("[data-option-id='text-size-increase']")?.click();
-    expect(preferences.text.fontSize).toBe(17);
-    expect(document.querySelector(".native-pdf-handwriting-text-menu-size")?.textContent).toBe("17px");
+    expect(preferences.text.fontSize).toBe(28.2);
+    expect(document.querySelector<HTMLInputElement>(".native-pdf-handwriting-text-menu-size-input")?.value).toBe("28.2");
+    expect(document.querySelector(".native-pdf-handwriting-text-menu-size")?.textContent).toBe("px");
     document.querySelector<HTMLButtonElement>("[data-option-id='text-size-decrease']")?.click();
-    expect(preferences.text.fontSize).toBe(16);
-    expect(document.querySelector(".native-pdf-handwriting-text-menu-size")?.textContent).toBe("16px");
+    expect(preferences.text.fontSize).toBe(27.2);
+    expect(document.querySelector<HTMLInputElement>(".native-pdf-handwriting-text-menu-size-input")?.value).toBe("27.2");
+    expect(document.querySelector(".native-pdf-handwriting-text-menu-size")?.textContent).toBe("px");
+    const sizeInput = document.querySelector<HTMLInputElement>(".native-pdf-handwriting-text-menu-size-input")!;
+    sizeInput.value = "18.46";
+    sizeInput.dispatchEvent(new Event("change"));
+    expect(preferences.text.fontSize).toBe(18.5);
+    expect(sizeInput.value).toBe("18.5");
     expect(document.querySelector(".native-pdf-handwriting-text-menu")).not.toBeNull();
     expect(changed).toHaveBeenCalled();
     toolbar.destroy();

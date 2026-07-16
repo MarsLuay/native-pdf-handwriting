@@ -79,7 +79,7 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
       : "ask";
     new Setting(containerEl)
       .setName("Text editor Escape key")
-      .setDesc("Choose whether Escape asks, saves the current text, or discards it.")
+      .setDesc("Choose whether Escape asks, saves the current text annotation, or discards it. Ctrl/Cmd+Enter always saves text.")
       .addDropdown((dropdown) =>
         dropdown
           .addOption("ask", "Always ask")
@@ -107,7 +107,7 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName("PDF navigation").setHeading();
     new Setting(containerEl)
       .setName("Treat single touch as")
-      .setDesc("Choose whether one-finger input is blocked, scrolls the PDF, or acts like the selected annotation tool.")
+      .setDesc("None blocks one-finger input. Touch scrolls the PDF. Stylus sends one finger to the selected annotation tool while Draw is enabled.")
       .addDropdown((dropdown) =>
         dropdown
           .addOption("none", "None")
@@ -123,7 +123,7 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Allow two-finger pinch zoom")
-      .setDesc("Use two fingers to zoom the PDF in and out. Enabled by default.")
+      .setDesc("Zoom when two fingers change distance. The gesture is classified once, so it does not also scroll the PDF. Enabled by default.")
       .addToggle((toggle) =>
         toggle.setValue(this.host.settings.twoFingerPinchZoom).onChange(async (value) => {
           await this.persistPatch({ twoFingerPinchZoom: value });
@@ -132,7 +132,7 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Allow two-finger swipe scroll")
-      .setDesc("Use a parallel two-finger swipe to scroll the PDF horizontally or vertically. Enabled by default.")
+      .setDesc("Scroll horizontally or vertically with two fingers moving in parallel. Distance changes use pinch zoom instead. Enabled by default.")
       .addToggle((toggle) =>
         toggle.setValue(this.host.settings.twoFingerSwipeScroll).onChange(async (value) => {
           await this.persistPatch({ twoFingerSwipeScroll: value });
@@ -158,7 +158,7 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName("Drawing").setHeading();
     new Setting(containerEl)
       .setName("Simplify strokes on release")
-      .setDesc("Snap finished ink to cleaner straight segments. Off keeps the exact path you drew.")
+      .setDesc("Reduce unnecessary points when you release a stroke for a cleaner path. Turn it off to keep every sampled point.")
       .addToggle((toggle) =>
         toggle.setValue(this.host.settings.simplifyStrokes).onChange(async (value) => {
           await this.persistPatch({ simplifyStrokes: value });
@@ -167,7 +167,7 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Hold to straighten strokes")
-      .setDesc("Hold the last point for one second before releasing to turn the current stroke into a straight line.")
+      .setDesc("Pause at the last point for one second, then release to convert the current stroke into a straight line. Moving the pen restarts the hold.")
       .addToggle((toggle) =>
         toggle.setValue(this.host.settings.holdToStraighten).onChange(async (value) => {
           await this.persistPatch({ holdToStraighten: value });
@@ -176,7 +176,7 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Hide stylus annotation label")
-      .setDesc("Hide the annotation page label shown when a stylus hovers over PDF ink.")
+      .setDesc("Remove the accessible page label from each ink canvas. Keep it enabled when screen-reader context is useful.")
       .addToggle((toggle) =>
         toggle.setValue(this.host.settings.hideStylusAnnotationLabel).onChange(async (value) => {
           await this.persistPatch({ hideStylusAnnotationLabel: value });
@@ -194,7 +194,7 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Annotation sidecar folder")
-      .setDesc("Vault-relative folder for annotation JSON files. The default hidden .obsidian folder keeps annotations out of File Explorer, but may make file synchronization harder. New PDF views use this location after saving the setting.")
+      .setDesc("Vault-relative folder for editable annotation JSON. The original PDF is never changed; Export PDF creates a separate copy. New PDF views use this location after saving the setting.")
       .then((setting) => this.addFolderPathInput(setting, {
         value: this.host.settings.sidecarFolder,
         persist: async (sidecarFolder) => this.persistPatch({ sidecarFolder }),

@@ -19,6 +19,7 @@ export interface AnnotationToolbarCallbacks {
   onPreferencesChange(preferences: ToolPreferences): void;
   onTextStyleChange?(patch: Partial<TextStyle>): boolean;
   onTextMarkdownFormat?(format: "bold" | "italic"): boolean;
+  selectedTextFontSize?(): { fontSize: number; mixed: boolean } | undefined;
   selectedTextColor?(): string | undefined;
   onSelectionColorChange?(color: string): boolean;
   onSelectionWidthChange?(width: number): boolean;
@@ -120,6 +121,7 @@ export class AnnotationToolbar {
 
   refresh(): void {
     this.updateButtons();
+    this.updateTextMenuSize();
   }
 
   destroy(): void {
@@ -250,10 +252,10 @@ export class AnnotationToolbar {
     const fontLabel = this.ownerDocument.createElement("label");
     fontLabel.textContent = "Font";
     const font = this.ownerDocument.createElement("select");
-    for (const family of ["sans-serif", "serif", "monospace"]) {
+    for (const { label, family } of this.obsidianTextFonts()) {
       const option = this.ownerDocument.createElement("option");
       option.value = family;
-      option.textContent = family === "sans-serif" ? "Sans serif" : family[0]!.toUpperCase() + family.slice(1);
+      option.textContent = label;
       option.selected = this.preferences.text.fontFamily === family;
       font.append(option);
     }
@@ -264,13 +266,41 @@ export class AnnotationToolbar {
 
     const controls = this.ownerDocument.createElement("div");
     controls.className = "native-pdf-handwriting-text-menu-controls";
-    const size = this.ownerDocument.createElement("span");
+    const selectedSize = this.callbacks.selectedTextFontSize?.();
+    const size = this.ownerDocument.createElement("div");
     size.className = "native-pdf-handwriting-text-menu-size";
-    size.textContent = `${this.preferences.text.fontSize}px`;
-    const setFontSize = (fontSize: number): void => {
-      this.applyTextStyle({ fontSize });
-      size.textContent = `${fontSize}px`;
+    const sizeInput = this.ownerDocument.createElement("input");
+    sizeInput.className = "native-pdf-handwriting-text-menu-size-input";
+    sizeInput.type = "text";
+    sizeInput.inputMode = "decimal";
+    sizeInput.setAttribute("aria-label", "Font size in pixels");
+    const suffix = this.ownerDocument.createElement("span");
+    const formatFontSize = (fontSize: number): string => String(Math.round(fontSize * 10) / 10);
+    const normalizedFontSize = (fontSize: number): number => Math.min(96, Math.max(8, Math.round(fontSize * 10) / 10));
+    let displayedFontSize = selectedSize?.fontSize ?? this.preferences.text.fontSize;
+    const updateSize = (fontSize: number, mixed = false): void => {
+      displayedFontSize = fontSize;
+      sizeInput.value = formatFontSize(fontSize);
+      suffix.textContent = mixed ? "px+" : "px";
     };
+    updateSize(selectedSize?.fontSize ?? this.preferences.text.fontSize, selectedSize?.mixed);
+    const setFontSize = (fontSize: number): void => {
+      const normalized = normalizedFontSize(fontSize);
+      this.applyTextStyle({ fontSize: normalized });
+      updateSize(normalized);
+    };
+    sizeInput.addEventListener("change", () => {
+      const fontSize = Number.parseFloat(sizeInput.value);
+      if (Number.isFinite(fontSize)) setFontSize(fontSize);
+      else updateSize(displayedFontSize);
+    }, { signal: this.abort.signal });
+    sizeInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        sizeInput.blur();
+      }
+    }, { signal: this.abort.signal });
+    size.append(sizeInput, suffix);
     const button = (id: string, label: string, action: () => void, pressed: boolean): HTMLButtonElement => {
       const element = this.ownerDocument.createElement("button");
       element.type = "button";
@@ -284,10 +314,10 @@ export class AnnotationToolbar {
     };
     controls.append(
       button("text-size-decrease", "-", () => {
-        setFontSize(Math.max(8, this.preferences.text.fontSize - 1));
+        setFontSize(displayedFontSize - 1);
       }, false),
       button("text-size-increase", "+", () => {
-        setFontSize(Math.min(96, this.preferences.text.fontSize + 1));
+        setFontSize(displayedFontSize + 1);
       }, false),
       button("text-bold", "B", () => {
         if (this.callbacks.onTextMarkdownFormat?.("bold")) {
@@ -314,6 +344,37 @@ export class AnnotationToolbar {
     }, { signal: this.abort.signal });
     content.append(fontLabel, controls, size);
     return { label: "Text options", content, focusFirst: !this.callbacks.hasActiveTextInput?.() };
+  }
+
+  private updateTextMenuSize(): void {
+    if (!this.dropdown.isOpen("text")) return;
+    const input = this.ownerDocument.querySelector<HTMLInputElement>(".native-pdf-handwriting-text-menu-size-input");
+    if (!input || this.ownerDocument.activeElement === input) return;
+    const selectedSize = this.callbacks.selectedTextFontSize?.();
+    const fontSize = selectedSize?.fontSize ?? this.preferences.text.fontSize;
+    input.value = String(Math.round(fontSize * 10) / 10);
+    const suffix = input.nextElementSibling;
+    if (suffix) suffix.textContent = selectedSize?.mixed ? "px+" : "px";
+  }
+
+  private obsidianTextFonts(): Array<{ label: string; family: string }> {
+    const document = this.ownerDocument;
+    const style = document.defaultView?.getComputedStyle(document.body);
+    const configured = [
+      { label: "Obsidian interface", variable: "--font-interface" },
+      { label: "Obsidian text", variable: "--font-text" },
+      { label: "Obsidian monospace", variable: "--font-monospace" }
+    ].map(({ label, variable }) => ({ label, family: style?.getPropertyValue(variable).trim() ?? "" }))
+      .filter((option) => option.family && !option.family.startsWith("var("));
+    const fonts = configured.length ? configured : [
+      { label: "Sans serif", family: "sans-serif" },
+      { label: "Serif", family: "serif" },
+      { label: "Monospace", family: "monospace" }
+    ];
+    if (!fonts.some((option) => option.family === this.preferences.text.fontFamily)) {
+      fonts.push({ label: "Current annotation font", family: this.preferences.text.fontFamily });
+    }
+    return fonts.filter((option, index) => fonts.findIndex((candidate) => candidate.family === option.family) === index);
   }
 
   private applyTextStyle(patch: Partial<TextStyle>): void {

@@ -290,6 +290,51 @@ describe("viewer runtime tracer", () => {
     await session.destroy();
   });
 
+  it("keeps Korean IME composition intact until it is committed", async () => {
+    const files = new MemoryFiles();
+    const adapter = new FakeAdapter();
+    const source = await PDFDocument.create();
+    source.addPage([600, 800]);
+    const session = await ViewerInkSession.create({
+      adapter,
+      pdfPath: "Notes/text-korean-ime.pdf",
+      settings: structuredClone(DEFAULT_SETTINGS),
+      sidecars: new SidecarRepository(files, "annotations"),
+      recovery: new RecoveryRepository(files, "recovery"),
+      saveSettings: async () => undefined,
+      readSourcePdf: async () => source.save(),
+      writeExport: async () => undefined,
+      notice: () => undefined
+    });
+    adapter.toolbarHost.querySelector<HTMLButtonElement>("[data-control='text']")?.click();
+    adapter.pageElement.dispatchEvent(pointer("pointerdown", 120, 160, "mouse"));
+    const input = adapter.pageElement.querySelector<HTMLDivElement>(".native-pdf-handwriting-text-input")!;
+
+    input.textContent = "ㅎ";
+    const composingNode = input.firstChild;
+    input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "ㅎ" }));
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertCompositionText", data: "ㅎ" }));
+    expect(input.firstChild).toBe(composingNode);
+
+    const candidateEnter = new KeyboardEvent("keydown", {
+      key: "Enter", bubbles: true, cancelable: true, isComposing: true
+    });
+    input.dispatchEvent(candidateEnter);
+    expect(candidateEnter.defaultPrevented).toBe(false);
+
+    input.textContent = "하";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertCompositionText", data: "하" }));
+    input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "하" }));
+    await Promise.resolve();
+    expect(input.textContent).toBe("하");
+
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true }));
+    await session.manualSave();
+    const sidecar = [...files.values.entries()].find(([path]) => path.startsWith("annotations/"));
+    expect(JSON.parse(sidecar![1]).pages[0].texts).toMatchObject([{ text: "하" }]);
+    await session.destroy();
+  });
+
   it("does not save an editor containing only Markdown emphasis delimiters", async () => {
     const files = new MemoryFiles();
     const adapter = new FakeAdapter();
@@ -464,6 +509,16 @@ describe("viewer runtime tracer", () => {
     setEditorText(input, "Format me");
     setEditorSelection(input, 0, 6);
     textButton?.click();
+    document.querySelector<HTMLButtonElement>("[data-option-id='text-bold']")?.click();
+    expect(input.textContent).toBe("**Format** me");
+    document.querySelector<HTMLButtonElement>("[data-option-id='text-bold']")?.click();
+    expect(input.textContent).toBe("Format me");
+    expect(editorSelection(input)).toEqual([0, 6]);
+    document.querySelector<HTMLButtonElement>("[data-option-id='text-italic']")?.click();
+    expect(input.textContent).toBe("*Format* me");
+    document.querySelector<HTMLButtonElement>("[data-option-id='text-italic']")?.click();
+    expect(input.textContent).toBe("Format me");
+    expect(editorSelection(input)).toEqual([0, 6]);
     document.querySelector<HTMLButtonElement>("[data-option-id='text-bold']")?.click();
     expect(input.textContent).toBe("**Format** me");
     document.querySelector<HTMLButtonElement>("[data-option-id='text-size-increase']")?.click();
@@ -738,6 +793,16 @@ describe("viewer runtime tracer", () => {
     document.querySelector<HTMLButtonElement>("[data-option-id='text-bold']")?.click();
     expect(input.textContent).toBe("Left****Right");
     expect(editorSelection(input)).toEqual([6, 6]);
+    document.querySelector<HTMLButtonElement>("[data-option-id='text-bold']")?.click();
+    expect(input.textContent).toBe("LeftRight");
+    expect(editorSelection(input)).toEqual([4, 4]);
+    document.querySelector<HTMLButtonElement>("[data-option-id='text-italic']")?.click();
+    expect(input.textContent).toBe("Left**Right");
+    expect(editorSelection(input)).toEqual([5, 5]);
+    document.querySelector<HTMLButtonElement>("[data-option-id='text-italic']")?.click();
+    expect(input.textContent).toBe("LeftRight");
+    expect(editorSelection(input)).toEqual([4, 4]);
+    document.querySelector<HTMLButtonElement>("[data-option-id='text-bold']")?.click();
     document.querySelector<HTMLButtonElement>("[data-option-id='text-italic']")?.click();
     expect(input.textContent).toBe("Left******Right");
     expect(editorSelection(input)).toEqual([7, 7]);
@@ -851,10 +916,33 @@ describe("viewer runtime tracer", () => {
         { text: "Heading", fontSize: 27.2, bold: true, italic: false }
       ]
     });
+    const headingSource = JSON.parse(sidecar![1]).pages[0].texts[0].sourceRuns;
+    expect(headingSource.map((run: { text: string }) => run.text).join("")).toBe("**Bold** _italic_\n# Heading");
+    expect(headingSource).toEqual([
+      expect.objectContaining({ fontSize: 16, bold: false, italic: false })
+    ]);
+    adapter.toolbarHost.querySelector<HTMLButtonElement>("[data-control='lasso']")?.click();
+    adapter.pageElement.dispatchEvent(pointer("pointerdown", 125, 165, "mouse"));
+    adapter.pageElement.dispatchEvent(pointer("pointerup", 125, 165, "mouse"));
+    adapter.pageElement.dispatchEvent(pointer("pointerdown", 125, 165, "mouse"));
+    adapter.pageElement.dispatchEvent(pointer("pointerup", 125, 165, "mouse"));
+    const reopened = adapter.pageElement.querySelector<HTMLDivElement>(".native-pdf-handwriting-text-input")!;
+    expect(reopened.textContent).toBe("**Bold** _italic_\n# Heading");
+    expect(Array.from(reopened.children).map((element) => ({
+      text: element.textContent,
+      fontSize: (element as HTMLElement).style.fontSize
+    }))).toContainEqual({ text: "Heading", fontSize: "27.2px" });
+    reopened.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true }));
+    await session.manualSave();
+    const savedAgain = JSON.parse([...files.values.entries()].find(([path]) => path.startsWith("annotations/"))![1]).pages[0].texts[0];
+    expect(savedAgain.sourceRuns.map((run: { text: string }) => run.text).join("")).toBe("**Bold** _italic_\n# Heading");
+    expect(savedAgain.runs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ text: "Heading", fontSize: 27.2, bold: true, italic: false })
+    ]));
     await session.destroy();
   });
 
-  it("preserves Markdown source when reopening formatted text and renders strike/highlight", async () => {
+  it("preserves Markdown source when reopening formatted text and renders strike", async () => {
     const files = new MemoryFiles();
     const adapter = new FakeAdapter();
     const source = await PDFDocument.create();
@@ -873,7 +961,7 @@ describe("viewer runtime tracer", () => {
     adapter.toolbarHost.querySelector<HTMLButtonElement>("[data-control='text']")?.click();
     adapter.pageElement.dispatchEvent(pointer("pointerdown", 120, 160, "mouse"));
     const input = adapter.pageElement.querySelector<HTMLDivElement>(".native-pdf-handwriting-text-input")!;
-    setEditorText(input, "***Both*** ~~crossed~~ ==marked==");
+    setEditorText(input, "***Both*** ~~crossed~~ plain");
     const preview = Array.from(input.children).map((element) => ({
       text: element.textContent,
       fontWeight: (element as HTMLElement).style.fontWeight,
@@ -882,13 +970,13 @@ describe("viewer runtime tracer", () => {
       backgroundColor: (element as HTMLElement).style.backgroundColor
     }));
     expect(preview).toContainEqual({
-      text: "Both", fontWeight: "700", fontStyle: "italic", textDecorationLine: "none", backgroundColor: "transparent"
+      text: "Both", fontWeight: "700", fontStyle: "italic", textDecorationLine: "none", backgroundColor: ""
     });
     expect(preview).toContainEqual({
-      text: "crossed", fontWeight: "400", fontStyle: "normal", textDecorationLine: "line-through", backgroundColor: "transparent"
+      text: "crossed", fontWeight: "400", fontStyle: "normal", textDecorationLine: "line-through", backgroundColor: ""
     });
     expect(preview).toContainEqual({
-      text: "marked", fontWeight: "400", fontStyle: "normal", textDecorationLine: "none", backgroundColor: "rgb(253, 230, 138)"
+      text: "~~ plain", fontWeight: "400", fontStyle: "normal", textDecorationLine: "none", backgroundColor: ""
     });
     const context = adapter.pageElement.querySelector<HTMLCanvasElement>(".native-pdf-handwriting-canvas")?.getContext("2d") as unknown as {
       fillStyle: string;
@@ -897,20 +985,19 @@ describe("viewer runtime tracer", () => {
     const rectangles: string[] = [];
     context.fillRect = () => rectangles.push(context.fillStyle);
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true }));
-    expect(rectangles).toContain("#fde68a");
     expect(rectangles).toContain("#111827");
 
     await session.manualSave();
     const sidecar = [...files.values.entries()].find(([path]) => path.startsWith("annotations/"));
     const saved = JSON.parse(sidecar![1]).pages[0].texts[0];
     expect(saved).toMatchObject({
-      text: "Both crossed marked",
-      sourceRuns: [{ text: "***Both*** ~~crossed~~ ==marked==" }]
+      text: "Both crossed plain",
+      sourceRuns: [{ text: "***Both*** ~~crossed~~ plain" }]
     });
     expect(saved.runs).toEqual(expect.arrayContaining([
-      expect.objectContaining({ text: "Both", bold: true, italic: true, strikethrough: false, highlight: false }),
-      expect.objectContaining({ text: "crossed", bold: false, italic: false, strikethrough: true, highlight: false }),
-      expect.objectContaining({ text: "marked", bold: false, italic: false, strikethrough: false, highlight: true })
+      expect.objectContaining({ text: "Both", bold: true, italic: true, strikethrough: false }),
+      expect.objectContaining({ text: "crossed", bold: false, italic: false, strikethrough: true }),
+      expect.objectContaining({ text: " plain", bold: false, italic: false, strikethrough: false })
     ]));
 
     adapter.toolbarHost.querySelector<HTMLButtonElement>("[data-control='lasso']")?.click();
@@ -919,16 +1006,16 @@ describe("viewer runtime tracer", () => {
     adapter.pageElement.dispatchEvent(pointer("pointerdown", 125, 165, "mouse"));
     adapter.pageElement.dispatchEvent(pointer("pointerup", 125, 165, "mouse"));
     const reopened = adapter.pageElement.querySelector<HTMLDivElement>(".native-pdf-handwriting-text-input")!;
-    expect(reopened.textContent).toBe("***Both*** ~~crossed~~ ==marked==");
+    expect(reopened.textContent).toBe("***Both*** ~~crossed~~ plain");
     setEditorSelection(reopened, 0, 7);
     setEditorSelection(reopened, 7, 7);
     reopened.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true }));
     await session.manualSave();
     const savedAgain = JSON.parse([...files.values.entries()].find(([path]) => path.startsWith("annotations/"))![1]);
     expect(savedAgain.pages[0].texts[0].runs).toEqual(expect.arrayContaining([
-      expect.objectContaining({ text: "Both", bold: true, italic: true, strikethrough: false, highlight: false }),
-      expect.objectContaining({ text: "crossed", strikethrough: true, highlight: false }),
-      expect.objectContaining({ text: "marked", strikethrough: false, highlight: true })
+      expect.objectContaining({ text: "Both", bold: true, italic: true, strikethrough: false }),
+      expect.objectContaining({ text: "crossed", strikethrough: true }),
+      expect.objectContaining({ text: " plain", strikethrough: false })
     ]));
     await session.destroy();
   });

@@ -11,5 +11,8 @@ First pass proves architecture and direct-view annotation path. Runtime compatib
 - OCR and handwriting recognition are intentionally absent.
 - MacBook Force Touch trackpad pressure is not available in Obsidian (Electron); stylus pressure works when the OS exposes it.
 - Source PDFs are never modified; annotated copies are export-only.
+- Flattened exports rasterize text into the PDF page content, so its visible appearance does not depend on PDF annotation support. Editable exports use FreeText annotations instead.
+- Text annotations support bold, italic, strike-through, and heading sizes. Leading `#` markers are retained in the editor source, while saved/exported text runs resolve each heading to explicit bold and size formatting.
+- Editable FreeText exports preserve Unicode in their annotation contents. Their visible appearance is rasterized with the selected Obsidian/system font, so colors, emphasis, strike-through, and headings remain visible without embedding a font. Generic PDF viewers use that appearance instead of reinterpreting incomplete rich-text styles; changing the text in another PDF app may not reproduce the same typography.
 
 Next phase: test inside Obsidian, record real private object graph by platform/version, fix compatibility adapter only, profile large PDFs.

@@ -66,7 +66,6 @@ export interface PdfTextRun {
   bold: boolean;
   italic: boolean;
   strikethrough: boolean;
-  highlight: boolean;
 }
 
 export interface DrawingToolPreferences {

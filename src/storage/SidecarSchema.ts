@@ -61,8 +61,7 @@ const isTextRun = (value: unknown): value is PdfTextRun => isRecord(value) &&
   typeof value.text === "string" && typeof value.color === "string" &&
   isFiniteNumber(value.fontSize) && value.fontSize > 0 && typeof value.fontFamily === "string" &&
   typeof value.bold === "boolean" && typeof value.italic === "boolean" &&
-  (value.strikethrough === undefined || typeof value.strikethrough === "boolean") &&
-  (value.highlight === undefined || typeof value.highlight === "boolean");
+  (value.strikethrough === undefined || typeof value.strikethrough === "boolean");
 
 export function validateSidecar(value: unknown): value is SidecarSchemaV1 {
   if (!isRecord(value) || value.schemaVersion !== SIDECAR_SCHEMA_VERSION ||
@@ -92,9 +91,39 @@ export function countSidecarStrokes(sidecar: SidecarSchemaV1 | null | undefined)
   return sidecar.pages.reduce((sum, page) => sum + page.strokes.length, 0);
 }
 
+function normalizeTextRun(run: PdfTextRun): PdfTextRun {
+  return {
+    text: run.text,
+    color: run.color,
+    fontSize: run.fontSize,
+    fontFamily: run.fontFamily,
+    bold: run.bold,
+    italic: run.italic,
+    strikethrough: run.strikethrough ?? false
+  };
+}
+
+function normalizeText(text: PdfTextAnnotation): PdfTextAnnotation {
+  return {
+    ...text,
+    ...(text.runs ? { runs: text.runs.map(normalizeTextRun) } : {}),
+    ...(text.sourceRuns ? { sourceRuns: text.sourceRuns.map(normalizeTextRun) } : {})
+  };
+}
+
+function normalizeSidecar(sidecar: SidecarSchemaV1): SidecarSchemaV1 {
+  return {
+    ...sidecar,
+    pages: sidecar.pages.map((page) => ({
+      ...page,
+      ...(page.texts ? { texts: page.texts.map(normalizeText) } : {})
+    }))
+  };
+}
+
 export function serializeSidecar(sidecar: SidecarSchemaV1): string {
   if (!validateSidecar(sidecar)) throw new TypeError("Invalid sidecar data");
-  return `${JSON.stringify(sidecar, null, 2)}\n`;
+  return `${JSON.stringify(normalizeSidecar(sidecar), null, 2)}\n`;
 }
 
 export function parseSidecar(json: string): SidecarSchemaV1 {
@@ -103,5 +132,5 @@ export function parseSidecar(json: string): SidecarSchemaV1 {
     throw new TypeError("Sidecar is not valid JSON");
   }
   if (!validateSidecar(parsed)) throw new TypeError("Unsupported or invalid sidecar schema");
-  return parsed;
+  return normalizeSidecar(parsed);
 }

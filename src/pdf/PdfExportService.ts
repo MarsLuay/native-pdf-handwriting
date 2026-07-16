@@ -1,4 +1,4 @@
-import { LineCapStyle, PDFDict, PDFDocument, PDFHexString, PDFName, rgb } from "pdf-lib";
+import { LineCapStyle, PDFDict, PDFDocument, PDFHexString, PDFImage, PDFName, PDFString, rgb } from "pdf-lib";
 import { DEFAULT_SETTINGS, type InkStroke, type PdfPoint, type PdfTextAnnotation, type PdfTextRun } from "../model";
 import { graphiteStampCircles, seedFromId } from "../tools/PencilTool";
 import { penSampleWidth, penSegmentWidths } from "../tools/PenTool";
@@ -182,18 +182,25 @@ export class PdfExportService {
         });
       }
     }
-    if (input.mode === "editable") {
-      for (const text of texts) {
-        const page = pdfDoc.getPages()[text.page - 1];
-        if (!page) throw new RangeError(`Text annotation ${text.id} references missing page ${text.page}`);
-        const pdfSize = page.getSize();
-        const inkPage = metricsByPage.get(text.page);
-        const sourceSize = inkPage && inkPage.width > 0 && inkPage.height > 0
-          ? { width: inkPage.width, height: inkPage.height }
-          : pdfSize;
-        const mappedPoint = mapInkPointToPdfPage(text, sourceSize, pdfSize);
-        const fontScale = mapInkWidthToPdfPage(1, sourceSize, pdfSize);
-        this.addFreeTextAnnotation(pdfDoc, page, {
+    for (const text of texts) {
+      const page = pdfDoc.getPages()[text.page - 1];
+      if (!page) throw new RangeError(`Text annotation ${text.id} references missing page ${text.page}`);
+      const pdfSize = page.getSize();
+      const inkPage = metricsByPage.get(text.page);
+      const sourceSize = inkPage && inkPage.width > 0 && inkPage.height > 0
+        ? { width: inkPage.width, height: inkPage.height }
+        : pdfSize;
+      const mappedPoint = mapInkPointToPdfPage(text, sourceSize, pdfSize);
+      const fontScale = mapInkWidthToPdfPage(1, sourceSize, pdfSize);
+      if (input.mode === "editable") {
+        await this.addFreeTextAnnotation(pdfDoc, page, {
+          annotation: text,
+          x: mappedPoint.x,
+          y: mappedPoint.y,
+          fontScale
+        });
+      } else {
+        await this.drawFlattenedText(pdfDoc, page, {
           annotation: text,
           x: mappedPoint.x,
           y: mappedPoint.y,
@@ -234,11 +241,11 @@ export class PdfExportService {
     const context = pdfDoc.context;
     const opacity = context.register(context.obj({ Type: "ExtGState", CA: stroke.opacity, ca: stroke.opacity }));
     const appearance = context.register(context.flateStream(
-      inkAppearanceStream(points, mapped.width, red, green, blue),
+      inkAppearanceStream(points, minX, minY, mapped.width, red, green, blue),
       {
         Type: "XObject",
         Subtype: "Form",
-        BBox: [minX, minY, maxX, maxY],
+        BBox: [0, 0, maxX - minX, maxY - minY],
         Resources: { ExtGState: { GS0: opacity } }
       }
     ));
@@ -262,34 +269,136 @@ export class PdfExportService {
     pdfDoc: PDFDocument,
     page: ReturnType<PDFDocument["getPages"]>[number],
     mapped: MappedTextAnnotation
-  ): void {
+  ): Promise<void> {
     const { annotation, x, y, fontScale } = mapped;
     const runs = textRuns(annotation);
     const bounds = textBounds(runs, x, y, fontScale);
-    const fonts = new Map<string, string>();
-    const appearance = pdfDoc.context.register(pdfDoc.context.flateStream(
-      textAppearanceStream(runs, bounds, fontScale, fonts),
-      {
-        Type: "XObject",
-        Subtype: "Form",
-        BBox: [bounds.minX, bounds.minY, bounds.maxX, bounds.maxY],
-        Resources: pdfDoc.context.obj({ Font: pdfDoc.context.obj(fontResources(pdfDoc, fonts)) })
-      }
-    ));
     const first = runs[0] ?? fallbackTextRun(annotation);
     const [red, green, blue] = colorComponents(first.color);
-    const annotationDict = pdfDoc.context.register(pdfDoc.context.obj({
+    const standardAppearance = hasStandardAppearance(runs);
+    const annotationBody = pdfDoc.context.obj({
       Type: "Annot",
       Subtype: "FreeText",
       Rect: [bounds.minX, bounds.minY, bounds.maxX, bounds.maxY],
       Contents: PDFHexString.fromText(annotation.text),
-      DA: `/${fontResourceName(first, fonts)} ${formatNumber(first.fontSize * fontScale)} Tf ${formatNumber(red)} ${formatNumber(green)} ${formatNumber(blue)} rg`,
-      C: [red, green, blue],
+      ...(standardAppearance ? {
+        RC: PDFHexString.fromText(richTextContents(runs)),
+        DS: PDFHexString.fromText(textStyleDeclaration(first))
+      } : {}),
+      BS: { Type: "Border", W: 0, S: "S" },
+      Border: [0, 0, 0],
       F: 4,
-      NM: PDFHexString.fromText(`handwriting-natively-text-${annotation.id}`),
-      AP: { N: appearance }
-    }));
+      NM: PDFHexString.fromText(`handwriting-natively-text-${annotation.id}`)
+    });
+    if (standardAppearance) {
+      const fonts = new Map<string, string>();
+      const appearance = pdfDoc.context.register(pdfDoc.context.flateStream(
+        textAppearanceStream(runs, bounds, fontScale, fonts),
+        {
+          Type: "XObject",
+          Subtype: "Form",
+          BBox: [0, 0, bounds.maxX - bounds.minX, bounds.maxY - bounds.minY],
+          Resources: pdfDoc.context.obj({ Font: pdfDoc.context.obj(fontResources(pdfDoc, fonts)) })
+        }
+      ));
+      annotationBody.set(PDFName.of("DA"), PDFString.of(`/${fontResourceName(first, fonts)} ${formatNumber(first.fontSize * fontScale)} Tf ${formatNumber(red)} ${formatNumber(green)} ${formatNumber(blue)} rg`));
+      annotationBody.set(PDFName.of("AP"), pdfDoc.context.obj({ N: appearance }));
+    } else {
+      return this.addRasterTextAppearance(pdfDoc, annotationBody, runs, bounds, fontScale, page);
+    }
+    const annotationDict = pdfDoc.context.register(annotationBody);
     page.node.addAnnot(annotationDict);
+    return Promise.resolve();
+  }
+
+  private async addRasterTextAppearance(
+    pdfDoc: PDFDocument,
+    annotation: PDFDict,
+    runs: readonly PdfTextRun[],
+    bounds: { minX: number; minY: number; maxX: number; maxY: number },
+    fontScale: number,
+    page: ReturnType<PDFDocument["getPages"]>[number]
+  ): Promise<void> {
+    const width = Math.max(1, bounds.maxX - bounds.minX);
+    const height = Math.max(1, bounds.maxY - bounds.minY);
+    const image = await this.rasterTextImage(pdfDoc, runs, width, height, fontScale);
+    if (image) {
+      const appearance = pdfDoc.context.register(pdfDoc.context.flateStream(
+        `q\n${formatNumber(width)} 0 0 ${formatNumber(height)} 0 0 cm\n/Im0 Do\nQ`,
+        {
+          Type: "XObject",
+          Subtype: "Form",
+          BBox: [0, 0, width, height],
+          Resources: pdfDoc.context.obj({ XObject: pdfDoc.context.obj({ Im0: image.ref }) })
+        }
+      ));
+      annotation.set(PDFName.of("AP"), pdfDoc.context.obj({ N: appearance }));
+    }
+    page.node.addAnnot(pdfDoc.context.register(annotation));
+  }
+
+  private async drawFlattenedText(
+    pdfDoc: PDFDocument,
+    page: ReturnType<PDFDocument["getPages"]>[number],
+    mapped: MappedTextAnnotation
+  ): Promise<void> {
+    const runs = textRuns(mapped.annotation);
+    const bounds = textBounds(runs, mapped.x, mapped.y, mapped.fontScale);
+    const width = Math.max(1, bounds.maxX - bounds.minX);
+    const height = Math.max(1, bounds.maxY - bounds.minY);
+    const image = await this.rasterTextImage(pdfDoc, runs, width, height, mapped.fontScale);
+    if (image) page.drawImage(image, { x: bounds.minX, y: bounds.minY, width, height });
+  }
+
+  private async rasterTextImage(
+    pdfDoc: PDFDocument,
+    runs: readonly PdfTextRun[],
+    width: number,
+    height: number,
+    fontScale: number
+  ): Promise<PDFImage | undefined> {
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    const pixelScale = 2;
+    if (!context || typeof canvas.toDataURL !== "function") return undefined;
+    canvas.width = Math.ceil(width * pixelScale);
+    canvas.height = Math.ceil(height * pixelScale);
+    const layout = textLayout(runs, fontScale);
+    let x = 0;
+    let top = 0;
+    let lineFontSize = 1;
+    for (const run of runs) {
+      const fontSize = Math.max(1, run.fontSize * fontScale);
+      const lines = run.text.split("\n");
+      const fontPrefix = `${run.italic ? "italic " : ""}${run.bold ? "700" : "400"} ${formatNumber(fontSize * pixelScale)}px`;
+      context.font = `${fontPrefix} sans-serif`;
+      context.font = `${fontPrefix} ${run.fontFamily}`;
+      for (const [index, line] of lines.entries()) {
+        if (line) {
+          lineFontSize = Math.max(lineFontSize, fontSize);
+          const lineWidth = context.measureText(line).width / pixelScale;
+          context.fillStyle = run.color;
+          const baseline = layout.topPadding + top + fontSize * 0.8;
+          context.fillText(line, x * pixelScale, baseline * pixelScale);
+          if (run.strikethrough) {
+            context.beginPath();
+            context.strokeStyle = run.color;
+            context.lineWidth = Math.max(0.5, fontSize * 0.06) * pixelScale;
+            context.moveTo(x * pixelScale, (baseline - fontSize * 0.3) * pixelScale);
+            context.lineTo((x + lineWidth) * pixelScale, (baseline - fontSize * 0.3) * pixelScale);
+            context.stroke();
+          }
+          x += lineWidth;
+        }
+        if (index < lines.length - 1) {
+          x = 0;
+          top += lineFontSize * 1.25;
+          lineFontSize = 1;
+        }
+      }
+    }
+    try { return await pdfDoc.embedPng(canvas.toDataURL("image/png")); }
+    catch { return undefined; }
   }
 }
 
@@ -301,14 +410,13 @@ function fallbackTextRun(annotation: PdfTextAnnotation): PdfTextRun {
     fontFamily: annotation.fontFamily ?? "sans-serif",
     bold: annotation.bold ?? false,
     italic: annotation.italic ?? false,
-    strikethrough: false,
-    highlight: false
+    strikethrough: false
   };
 }
 
 function textRuns(annotation: PdfTextAnnotation): PdfTextRun[] {
   return annotation.runs?.length
-    ? annotation.runs.map((run) => ({ ...run, strikethrough: run.strikethrough ?? false, highlight: run.highlight ?? false }))
+    ? annotation.runs.map((run) => ({ ...run, strikethrough: run.strikethrough ?? false }))
     : [fallbackTextRun(annotation)];
 }
 
@@ -318,30 +426,51 @@ function textBounds(
   y: number,
   fontScale: number
 ): { minX: number; minY: number; maxX: number; maxY: number } {
+  const layout = textLayout(runs, fontScale);
+  return {
+    minX: x,
+    minY: y - layout.contentHeight - layout.bottomPadding,
+    maxX: x + layout.maxWidth + layout.maxFontSize * 0.2,
+    maxY: y + layout.topPadding
+  };
+}
+
+function textLayout(runs: readonly PdfTextRun[], fontScale: number): {
+  maxWidth: number;
+  maxFontSize: number;
+  contentHeight: number;
+  topPadding: number;
+  bottomPadding: number;
+} {
   let lineWidth = 0;
   let maxWidth = 1;
-  let lineCount = 1;
   let maxFontSize = 1;
+  let lineFontSize = 1;
+  let contentHeight = 0;
   for (const run of runs) {
     const fontSize = Math.max(1, run.fontSize * fontScale);
     maxFontSize = Math.max(maxFontSize, fontSize);
     const lines = run.text.split("\n");
     for (let index = 0; index < lines.length; index += 1) {
-      lineWidth += lines[index]!.length * fontSize * 0.55;
+      // Reserve enough room for full-width Unicode glyphs and italic overhang.
+      lineWidth += lines[index]!.length * fontSize * 1.1;
+      if (lines[index]) lineFontSize = Math.max(lineFontSize, fontSize);
       if (index < lines.length - 1) {
         maxWidth = Math.max(maxWidth, lineWidth);
         lineWidth = 0;
-        lineCount += 1;
+        contentHeight += lineFontSize * 1.25;
+        lineFontSize = 1;
       }
     }
   }
   maxWidth = Math.max(maxWidth, lineWidth);
-  const lineHeight = maxFontSize * 1.25;
+  contentHeight += lineFontSize * 1.25;
   return {
-    minX: x,
-    minY: y - lineHeight * (lineCount - 1) - maxFontSize * 0.3,
-    maxX: x + maxWidth + maxFontSize * 0.2,
-    maxY: y + maxFontSize * 0.9
+    maxWidth,
+    maxFontSize,
+    contentHeight,
+    topPadding: maxFontSize * 0.1,
+    bottomPadding: maxFontSize * 0.2
   };
 }
 
@@ -351,35 +480,83 @@ function textAppearanceStream(
   fontScale: number,
   fonts: Map<string, string>
 ): string {
-  const commands = ["q", "BT"];
-  let x = bounds.minX;
-  let y = bounds.maxY - (bounds.maxY - bounds.minY) * 0.7;
+  const width = bounds.maxX - bounds.minX;
+  const height = bounds.maxY - bounds.minY;
+  const layout = textLayout(runs, fontScale);
+  const text: string[] = ["BT"];
+  const strikethroughs: string[] = [];
+  let x = 0;
+  let top = 0;
+  let lineFontSize = 1;
   for (const run of runs) {
     const fontSize = Math.max(1, run.fontSize * fontScale);
     const [red, green, blue] = colorComponents(run.color);
-    for (const [index, line] of run.text.split("\n").entries()) {
+    const lines = run.text.split("\n");
+    for (const [index, line] of lines.entries()) {
       if (line) {
-        commands.push(`/${fontResourceName(run, fonts)} ${formatNumber(fontSize)} Tf`);
-        commands.push(`${formatNumber(red)} ${formatNumber(green)} ${formatNumber(blue)} rg`);
-        commands.push(`1 0 0 1 ${formatNumber(x - bounds.minX)} ${formatNumber(y - bounds.minY)} Tm`);
-        commands.push(`${PDFHexString.fromText(line).toString()} Tj`);
-        x += line.length * fontSize * 0.55;
+        lineFontSize = Math.max(lineFontSize, fontSize);
+        const lineWidth = line.length * fontSize * 1.1;
+        const baseline = height - layout.topPadding - top - fontSize * 0.8;
+        text.push(`/${fontResourceName(run, fonts)} ${formatNumber(fontSize)} Tf`);
+        text.push(`${formatNumber(red)} ${formatNumber(green)} ${formatNumber(blue)} rg`);
+        text.push(`${formatNumber(red)} ${formatNumber(green)} ${formatNumber(blue)} RG`);
+        if (run.bold) text.push(`${formatNumber(Math.max(0.2, fontSize * 0.03))} w`, "2 Tr");
+        text.push(`1 0 ${run.italic ? "0.2" : "0"} 1 ${formatNumber(x)} ${formatNumber(baseline)} Tm`);
+        text.push(`${asciiPdfText(line).toString()} Tj`);
+        if (run.bold) text.push("0 Tr");
+        if (run.strikethrough) strikethroughs.push(
+          "q", `${formatNumber(red)} ${formatNumber(green)} ${formatNumber(blue)} RG`, `${formatNumber(Math.max(0.5, fontSize * 0.06))} w`,
+          `${formatNumber(x)} ${formatNumber(baseline + fontSize * 0.3)} m`, `${formatNumber(x + lineWidth)} ${formatNumber(baseline + fontSize * 0.3)} l`, "S", "Q"
+        );
+        x += lineWidth;
       }
-      if (index < run.text.split("\n").length - 1) {
-        x = bounds.minX;
-        y -= fontSize * 1.25;
+      if (index < lines.length - 1) {
+        x = 0;
+        top += lineFontSize * 1.25;
+        lineFontSize = 1;
       }
     }
   }
-  commands.push("ET", "Q");
-  return commands.join("\n");
+  return ["q", ...text, "ET", ...strikethroughs, "Q"].join("\n");
+}
+
+function richTextContents(runs: readonly PdfTextRun[]): string {
+  const spans = runs.map((run) => {
+    const decorations = run.strikethrough ? "line-through" : "";
+    return `<span style="${escapeXml(textStyleDeclaration(run, decorations))}">${escapeXml(run.text).replace(/\n/g, "<br/>")}</span>`;
+  }).join("");
+  return `<body xmlns="http://www.w3.org/1999/xhtml"><p>${spans}</p></body>`;
+}
+
+function escapeXml(text: string): string {
+  return text.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&apos;" })[character]!);
+}
+
+function textStyleDeclaration(run: Pick<PdfTextRun, "fontFamily" | "fontSize" | "color" | "bold" | "italic">, decorations = ""): string {
+  return [
+    `font-family:${run.fontFamily}`,
+    `font-size:${formatNumber(run.fontSize)}pt`,
+    `color:${run.color}`,
+    run.bold ? "font-weight:bold" : "",
+    run.italic ? "font-style:italic" : "",
+    decorations
+  ].filter(Boolean).join(";");
+}
+
+function hasStandardAppearance(runs: readonly PdfTextRun[]): boolean {
+  return runs.every((run) => /^[\x20-\x7e\n]*$/.test(run.text));
+}
+
+function asciiPdfText(text: string): PDFHexString {
+  return PDFHexString.of([...text].map((character) => character.charCodeAt(0).toString(16).padStart(2, "0")).join(""));
 }
 
 function fontResourceName(run: Pick<PdfTextRun, "fontFamily" | "bold" | "italic">, fonts: Map<string, string>): string {
-  const base = run.fontFamily === "serif"
-    ? run.bold && run.italic ? "Times-BoldItalic" : run.bold ? "Times-Bold" : run.italic ? "Times-Italic" : "Times-Roman"
-    : run.fontFamily === "monospace"
-      ? run.bold && run.italic ? "Courier-BoldOblique" : run.bold ? "Courier-Bold" : run.italic ? "Courier-Oblique" : "Courier"
+  const family = run.fontFamily.toLowerCase();
+  const base = family.includes("mono") || family.includes("code")
+    ? run.bold && run.italic ? "Courier-BoldOblique" : run.bold ? "Courier-Bold" : run.italic ? "Courier-Oblique" : "Courier"
+    : family.includes("serif")
+      ? run.bold && run.italic ? "Times-BoldItalic" : run.bold ? "Times-Bold" : run.italic ? "Times-Italic" : "Times-Roman"
       : run.bold && run.italic ? "Helvetica-BoldOblique" : run.bold ? "Helvetica-Bold" : run.italic ? "Helvetica-Oblique" : "Helvetica";
   if (!fonts.has(base)) fonts.set(base, `F${fonts.size}`);
   return fonts.get(base)!;
@@ -410,6 +587,8 @@ function colorComponents(value: string): [number, number, number] {
 
 function inkAppearanceStream(
   points: readonly { x: number; y: number }[],
+  minX: number,
+  minY: number,
   width: number,
   red: number,
   green: number,
@@ -424,8 +603,8 @@ function inkAppearanceStream(
     `${format(width)} w`,
     "1 J",
     "1 j",
-    `${format(first!.x)} ${format(first!.y)} m`,
-    ...rest.map((point) => `${format(point.x)} ${format(point.y)} l`),
+    `${format(first!.x - minX)} ${format(first!.y - minY)} m`,
+    ...rest.map((point) => `${format(point.x - minX)} ${format(point.y - minY)} l`),
     "S",
     "Q"
   ].join("\n");

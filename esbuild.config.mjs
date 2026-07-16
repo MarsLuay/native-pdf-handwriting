@@ -7,14 +7,14 @@ import { fileURLToPath } from "node:url";
 
 const production = process.argv[2] === "production";
 const root = dirname(fileURLToPath(import.meta.url));
-const vaultPluginDir = resolve(root, "../../.obsidian/plugins/native-pdf-handwriting");
+const vaultPluginDir = resolve(root, "../native-pdf-handwriting");
 
 function normalizePdfJsBundleWhitespace() {
   const output = resolve(root, "main.js");
   const unstable = "e+=s.deleted?\"f\":\"n\",e+=` \n`}}return e";
   const stable = "e+=s.deleted?\"f\":\"n\",e+=`\\x20\n`}}return e";
   const bundle = readFileSync(output, "utf8");
-  if (bundle.includes(unstable)) writeFileSync(output, bundle.replace(unstable, stable));
+  if (bundle.includes(unstable)) writeFileSync(output, bundle.replaceAll(unstable, stable));
 }
 
 function deployToVaultPlugin() {

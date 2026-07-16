@@ -91,6 +91,7 @@ interface PageSurface {
 interface ActiveTextEditor {
   input: HTMLDivElement;
   runs: PdfTextRun[];
+  composing: boolean;
   point: Pick<PdfPoint, "x" | "y">;
   selectionStart: number;
   selectionEnd: number;
@@ -205,6 +206,7 @@ export class ViewerInkSession {
         },
         onTextStyleChange: (patch) => this.applyTextStyle(patch),
         onTextMarkdownFormat: (format) => this.insertTextMarkdownFormat(format),
+        selectedTextFontSize: () => this.activeTextSelectionFontSize(),
         selectedTextColor: () => this.activeTextColor(),
         onSelectionColorChange: (color) => this.recolorSelection(color),
         onSelectionWidthChange: (width) => this.resizeSelection(width),
@@ -1298,6 +1300,7 @@ export class ViewerInkSession {
     const editor: ActiveTextEditor = {
       input,
       runs: this.textSourceRuns(existing, style),
+      composing: false,
       point,
       selectionStart: 0,
       selectionEnd: 0,
@@ -1312,7 +1315,10 @@ export class ViewerInkSession {
       drag: null
     };
     this.activeTextEditor = editor;
-    const rememberSelection = (): void => this.captureTextEditorSelection(editor);
+    const rememberSelection = (): void => {
+      this.captureTextEditorSelection(editor);
+      this.toolbar.refresh();
+    };
     const commit = (): void => {
       if (editor.cancelled) return;
       editor.cancelled = true;
@@ -1355,6 +1361,7 @@ export class ViewerInkSession {
     };
     editor.commit = commit;
     input.addEventListener("keydown", (keyEvent) => {
+      if (editor.composing || keyEvent.isComposing) return;
       if (this.isTextEditorCommitShortcut(keyEvent)) {
         keyEvent.preventDefault();
         commit();
@@ -1387,9 +1394,23 @@ export class ViewerInkSession {
     input.addEventListener("pointerup", rememberSelection);
     input.ownerDocument.addEventListener("selectionchange", rememberSelection, { signal: editor.abort.signal });
     input.addEventListener("beforeinput", (inputEvent) => {
+      if (editor.composing || inputEvent.isComposing) return;
       if (inputEvent.inputType !== "insertText" || !inputEvent.data) return;
       inputEvent.preventDefault();
       this.insertTextIntoEditor(editor, inputEvent.data);
+    });
+    input.addEventListener("compositionstart", () => {
+      editor.composing = true;
+    });
+    input.addEventListener("compositionend", () => {
+      editor.composing = false;
+      queueMicrotask(() => {
+        if (this.activeTextEditor !== editor || !editor.input.isConnected || editor.composing) return;
+        editor.runs = this.readTextEditorRuns(editor);
+        rememberSelection();
+        this.renderTextEditor(editor);
+        this.setTextEditorSelection(editor, editor.selectionStart, editor.selectionEnd);
+      });
     });
     input.addEventListener("pointerdown", (pointerEvent) => this.startTextEditorDrag(editor, surface, pointerEvent));
     input.addEventListener("pointermove", (pointerEvent) => this.moveTextEditorDrag(editor, surface, pointerEvent));
@@ -1398,6 +1419,7 @@ export class ViewerInkSession {
     input.addEventListener("input", () => {
       editor.runs = this.readTextEditorRuns(editor);
       rememberSelection();
+      if (editor.composing) return;
       this.renderTextEditor(editor);
       this.setTextEditorSelection(editor, editor.selectionStart, editor.selectionEnd);
     });
@@ -1603,6 +1625,25 @@ export class ViewerInkSession {
     return this.styleSelectedTextAnnotations(patch);
   }
 
+  private activeTextSelectionFontSize(): { fontSize: number; mixed: boolean } | undefined {
+    const editor = this.activeTextEditor;
+    if (!editor) return undefined;
+    this.captureTextEditorSelection(editor);
+    if (editor.selectionStart === editor.selectionEnd) return undefined;
+    let position = 0;
+    let largest = 0;
+    const sizes = new Set<number>();
+    for (const run of this.previewMarkdownTextRuns(editor.runs)) {
+      const end = position + run.text.length;
+      if (editor.selectionStart < end && editor.selectionEnd > position) {
+        largest = Math.max(largest, run.fontSize);
+        sizes.add(run.fontSize);
+      }
+      position = end;
+    }
+    return largest > 0 ? { fontSize: largest, mixed: sizes.size > 1 } : undefined;
+  }
+
   private updateTextEditorStyle(editor: ActiveTextEditor): void {
     const surface = this.surfaces.get(editor.page);
     if (!surface) return;
@@ -1658,6 +1699,20 @@ export class ViewerInkSession {
     const marker = format === "bold" ? "**" : "*";
     const start = editor.selectionStart;
     const end = editor.selectionEnd;
+    const markerLength = this.markdownEmphasisMarkerLengthAroundSelection(editor, format);
+    if (markerLength > 0) {
+      editor.runs = this.mergeTextRuns([
+        ...this.sliceTextRuns(editor.runs, 0, start - markerLength),
+        ...this.sliceTextRuns(editor.runs, start, end),
+        ...this.sliceTextRuns(editor.runs, end + markerLength, Number.POSITIVE_INFINITY)
+      ]);
+      editor.selectionStart = start - markerLength;
+      editor.selectionEnd = end - markerLength;
+      this.renderTextEditor(editor);
+      this.setTextEditorSelection(editor, editor.selectionStart, editor.selectionEnd);
+      this.restoreTextEditorSelection(editor);
+      return true;
+    }
     const markerStyle = this.textRunAt(editor.runs, start) ?? this.textRun("", editor.style);
     const before = this.sliceTextRuns(editor.runs, 0, start);
     const selected = this.sliceTextRuns(editor.runs, start, end);
@@ -1675,6 +1730,19 @@ export class ViewerInkSession {
     this.setTextEditorSelection(editor, editor.selectionStart, editor.selectionEnd);
     this.restoreTextEditorSelection(editor);
     return true;
+  }
+
+  private markdownEmphasisMarkerLengthAroundSelection(editor: ActiveTextEditor, format: "bold" | "italic"): number {
+    const text = editor.runs.map((run) => run.text).join("");
+    const countMarkers = (start: number, direction: -1 | 1): number => {
+      let count = 0;
+      for (let index = start; text[index] === "*"; index += direction) count += 1;
+      return count;
+    };
+    const before = countMarkers(editor.selectionStart - 1, -1);
+    const after = countMarkers(editor.selectionEnd, 1);
+    if (format === "bold") return before >= 2 && after >= 2 ? 2 : 0;
+    return (before === 1 && after === 1) || (before >= 3 && after >= 3) ? 1 : 0;
   }
 
   private markdownEmphasisMarkerLengthAtCaret(editor: ActiveTextEditor, format: "bold" | "italic"): number {
@@ -1750,21 +1818,23 @@ export class ViewerInkSession {
   private textRun(text: string, style: ToolPreferences["text"]): PdfTextRun {
     return {
       text, color: style.color, fontSize: style.fontSize, fontFamily: style.fontFamily,
-      bold: style.bold, italic: style.italic, strikethrough: false, highlight: false
+      bold: style.bold, italic: style.italic, strikethrough: false
     };
   }
 
   private textRuns(annotation: PdfTextAnnotation | undefined, fallback: ToolPreferences["text"]): PdfTextRun[] {
     if (annotation?.runs?.length) return annotation.runs.map((run) => ({
-      ...run, strikethrough: run.strikethrough ?? false, highlight: run.highlight ?? false
+      ...run, strikethrough: run.strikethrough ?? false
     }));
     return [this.textRun(annotation?.text ?? "", this.textStyle(annotation, fallback))];
   }
 
   private textSourceRuns(annotation: PdfTextAnnotation | undefined, fallback: ToolPreferences["text"]): PdfTextRun[] {
-    if (annotation?.sourceRuns?.length) return annotation.sourceRuns.map((run) => ({
-      ...run, strikethrough: run.strikethrough ?? false, highlight: run.highlight ?? false
-    }));
+    if (annotation?.sourceRuns?.length) {
+      return annotation.sourceRuns.map((run) => ({
+        ...run, strikethrough: run.strikethrough ?? false
+      }));
+    }
     return this.markdownSourceRuns(this.textRuns(annotation, fallback));
   }
 
@@ -1776,9 +1846,9 @@ export class ViewerInkSession {
     const source: PdfTextRun[] = [];
     for (const run of runs) {
       const emphasis = this.markdownEmphasisMarker(run);
-      const prefix = `${run.highlight ? "==" : ""}${run.strikethrough ? "~~" : ""}${emphasis}`;
-      const suffix = `${emphasis}${run.strikethrough ? "~~" : ""}${run.highlight ? "==" : ""}`;
-      const style = { ...run, bold: false, italic: false, strikethrough: false, highlight: false };
+      const prefix = `${run.strikethrough ? "~~" : ""}${emphasis}`;
+      const suffix = `${emphasis}${run.strikethrough ? "~~" : ""}`;
+      const style = { ...run, bold: false, italic: false, strikethrough: false };
       if (prefix) source.push({ ...style, text: prefix });
       source.push({ ...style, text: run.text });
       if (suffix) source.push({ ...style, text: suffix });
@@ -1826,7 +1896,7 @@ export class ViewerInkSession {
   }
 
   private isMarkdownDelimiterOnly(text: string): boolean {
-    return text.trim().length > 0 && /^[*_~=\s]+$/.test(text);
+    return text.trim().length > 0 && /^[*_~\s]+$/.test(text);
   }
 
   private trimTextRuns(runs: readonly PdfTextRun[]): PdfTextRun[] {
@@ -1861,7 +1931,7 @@ export class ViewerInkSession {
 
   private markdownTextRuns(runs: readonly PdfTextRun[], retainMarkers: boolean): PdfTextRun[] {
     const source = runs.map((run) => run.text).join("");
-    if (!source.includes("*") && !source.includes("_") && !source.includes("#") && !source.includes("~") && !source.includes("=")) {
+    if (!source.includes("*") && !source.includes("_") && !source.includes("#") && !source.includes("~")) {
       return this.mergeTextRuns(runs);
     }
     const characters: Array<{ text: string; style: PdfTextRun }> = [];
@@ -1875,7 +1945,6 @@ export class ViewerInkSession {
       bold: boolean,
       italic: boolean,
       strikethrough: boolean,
-      highlight: boolean,
       headingLevel?: number
     ): void => {
       const style = characters[sourceIndex]?.style;
@@ -1886,13 +1955,12 @@ export class ViewerInkSession {
         bold: style.bold || bold,
         italic: style.italic || italic,
         strikethrough: style.strikethrough || strikethrough,
-        highlight: style.highlight || highlight,
         fontSize: headingLevel ? this.headingFontSize(style.fontSize, headingLevel) : style.fontSize
       });
     };
     const appendMarker = (start: number, end: number): void => {
       if (!retainMarkers) return;
-      for (let index = start; index < end; index += 1) append(source[index]!, index, false, false, false, false);
+      for (let index = start; index < end; index += 1) append(source[index]!, index, false, false, false);
     };
     const parseRange = (
       start: number,
@@ -1900,7 +1968,6 @@ export class ViewerInkSession {
       bold: boolean,
       italic: boolean,
       strikethrough: boolean,
-      highlight: boolean,
       headingLevel?: number
     ): void => {
       for (let index = start; index < end;) {
@@ -1913,12 +1980,12 @@ export class ViewerInkSession {
           appendMarker(index, markerEnd);
           parseRange(
             markerEnd, lineEnd === -1 || lineEnd > end ? end : lineEnd,
-            true, italic, strikethrough, highlight, heading[1]!.length
+            true, italic, strikethrough, heading[1]!.length
           );
           index = lineEnd === -1 || lineEnd > end ? end : lineEnd;
           continue;
         }
-        const marker = ["***", "___", "**", "__", "~~", "==", "*", "_"].find((candidate) => source.startsWith(candidate, index));
+        const marker = ["***", "___", "**", "__", "~~", "*", "_"].find((candidate) => source.startsWith(candidate, index));
         const closing = marker ? source.indexOf(marker, index + marker.length) : -1;
         if (marker && closing > index + marker.length && closing < end) {
           appendMarker(index, index + marker.length);
@@ -1928,18 +1995,17 @@ export class ViewerInkSession {
             bold || marker.includes("**") || marker.includes("__"),
             italic || marker.length === 1 || marker.length === 3,
             strikethrough || marker === "~~",
-            highlight || marker === "==",
             headingLevel
           );
           appendMarker(closing, closing + marker.length);
           index = closing + marker.length;
           continue;
         }
-        append(source[index]!, index, bold, italic, strikethrough, highlight, headingLevel);
+        append(source[index]!, index, bold, italic, strikethrough, headingLevel);
         index += 1;
       }
     };
-    parseRange(0, source.length, false, false, false, false);
+    parseRange(0, source.length, false, false, false);
     return this.mergeTextRuns(parsed);
   }
 
@@ -1954,7 +2020,7 @@ export class ViewerInkSession {
       const previous = merged.at(-1);
         if (previous && previous.color === run.color && previous.fontSize === run.fontSize && previous.fontFamily === run.fontFamily &&
           previous.bold === run.bold && previous.italic === run.italic &&
-          previous.strikethrough === run.strikethrough && previous.highlight === run.highlight) previous.text += run.text;
+          previous.strikethrough === run.strikethrough) previous.text += run.text;
       else if (run.text) merged.push({ ...run });
     }
     return merged;
@@ -1966,7 +2032,7 @@ export class ViewerInkSession {
       return other !== undefined && run.text === other.text && run.color === other.color &&
         run.fontSize === other.fontSize && run.fontFamily === other.fontFamily &&
         run.bold === other.bold && run.italic === other.italic &&
-        run.strikethrough === other.strikethrough && run.highlight === other.highlight;
+        run.strikethrough === other.strikethrough;
     });
   }
 
@@ -2016,14 +2082,12 @@ export class ViewerInkSession {
     span.dataset.bold = String(source.bold);
     span.dataset.italic = String(source.italic);
     span.dataset.strikethrough = String(source.strikethrough);
-    span.dataset.highlight = String(source.highlight);
     span.style.color = preview.color;
     span.style.fontSize = `${preview.fontSize * this.displayScale(surface)}px`;
     span.style.fontFamily = preview.fontFamily;
     span.style.fontWeight = preview.bold ? "700" : "400";
     span.style.fontStyle = preview.italic ? "italic" : "normal";
     span.style.textDecorationLine = preview.strikethrough ? "line-through" : "none";
-    span.style.backgroundColor = preview.highlight ? "#fde68a" : "transparent";
     span.textContent = text;
     input.append(span);
   }
@@ -2048,8 +2112,7 @@ export class ViewerInkSession {
             fontFamily: node.dataset.fontFamily ?? inherited.fontFamily,
             bold: node.dataset.bold === "true",
             italic: node.dataset.italic === "true",
-            strikethrough: node.dataset.strikethrough === "true",
-            highlight: node.dataset.highlight === "true"
+            strikethrough: node.dataset.strikethrough === "true"
           }
         : inherited;
       for (const child of node.childNodes) append(child, style);
@@ -2988,6 +3051,7 @@ export class ViewerInkSession {
       }
       let x = point.x;
       let y = point.y;
+      let lineFontSize = fontSize;
       for (const run of runs) {
         const runSize = Math.max(8, run.fontSize * scale);
         context.fillStyle = run.color;
@@ -2995,13 +3059,11 @@ export class ViewerInkSession {
         for (const part of run.text.split(/(\n)/)) {
           if (part === "\n") {
             x = point.x;
-            y += runSize * 1.25;
+            y += lineFontSize * 1.25;
+            lineFontSize = runSize;
           } else if (part) {
+            lineFontSize = Math.max(lineFontSize, runSize);
             const width = context.measureText(part).width;
-            if (run.highlight) {
-              context.fillStyle = "#fde68a";
-              context.fillRect(x, y + runSize * 0.1, width, runSize * 1.1);
-            }
             context.fillStyle = run.color;
             context.fillText(part, x, y);
             if (run.strikethrough) {
