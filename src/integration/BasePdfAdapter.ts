@@ -102,7 +102,7 @@ export abstract class BasePdfAdapter implements ObsidianPdfAdapter {
   mountOverlay(pageNumber: number): HTMLElement {
     const page = this.locator.page(pageNumber);
     if (!page) throw new Error(`Cannot mount annotation overlay: PDF page ${pageNumber} is unavailable`);
-    const overlay = page.element.ownerDocument.createElement("div");
+    const overlay = page.element.ownerDocument.createDiv();
     overlay.className = "native-pdf-handwriting-page-overlay";
     overlay.dataset.pageNumber = String(pageNumber);
     overlay.dataset.focusOverlayInternal = "true";
@@ -140,7 +140,7 @@ export abstract class BasePdfAdapter implements ObsidianPdfAdapter {
     const chrome = this.ensureSidebarChrome();
     chrome.classList.remove("is-toolbar-left", "is-toolbar-right");
     chrome.classList.add(placement === "left" ? "is-toolbar-left" : "is-toolbar-right");
-    const rail = toolbar.ownerDocument.createElement("div");
+    const rail = toolbar.ownerDocument.createDiv();
     rail.className = `native-pdf-handwriting-rail is-${placement}`;
     toolbar.classList.add(placement === "left" ? "is-sidebar-left" : "is-sidebar-right");
     rail.append(toolbar);
@@ -189,7 +189,7 @@ export abstract class BasePdfAdapter implements ObsidianPdfAdapter {
     if (isHTMLElement(existing)) return existing;
     const wrapTarget = this.sidebarWrapTarget();
     const parent = wrapTarget.parentElement ?? this.host;
-    const chrome = wrapTarget.ownerDocument.createElement("div");
+    const chrome = wrapTarget.ownerDocument.createDiv();
     chrome.className = "native-pdf-handwriting-chrome";
     // Insert at the scroll host's seat so an in-flow PDF sidebar sibling stays left of chrome.
     parent.insertBefore(chrome, wrapTarget);

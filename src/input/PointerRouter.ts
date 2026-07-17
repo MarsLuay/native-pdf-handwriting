@@ -69,11 +69,11 @@ export class PointerRouter {
     palmPolicy = new PalmRejectionPolicy()
   ) {
     this.palmPolicy = palmPolicy;
-    this.eraserCursor = element.ownerDocument.createElement("span");
+    this.eraserCursor = element.ownerDocument.createSpan();
     this.eraserCursor.className = "native-pdf-handwriting-eraser-cursor";
     this.eraserCursor.setAttribute("aria-hidden", "true");
     this.eraserCursor.hidden = true;
-    this.drawCursor = element.ownerDocument.createElement("span");
+    this.drawCursor = element.ownerDocument.createSpan();
     this.drawCursor.className = "native-pdf-handwriting-draw-cursor";
     this.drawCursor.setAttribute("aria-hidden", "true");
     this.drawCursor.hidden = true;

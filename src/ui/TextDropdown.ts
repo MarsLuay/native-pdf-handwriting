@@ -13,19 +13,19 @@ export function textMenu(
   signal: AbortSignal,
   onPointerDown?: () => void
 ): HTMLElement {
-  const content = ownerDocument.createElement("div");
+  const content = ownerDocument.createDiv();
   content.className = "native-pdf-handwriting-text-menu";
   const field = (labelText: string, input: HTMLInputElement | HTMLSelectElement): void => {
-    const label = ownerDocument.createElement("label");
+    const label = ownerDocument.createEl('label');
     label.textContent = labelText;
     label.append(input);
     content.append(label);
   };
 
-  const font = ownerDocument.createElement("select");
+  const font = ownerDocument.createEl('select');
   font.addEventListener("pointerdown", () => onPointerDown?.(), { signal });
   for (const [label, value] of [["Sans serif", "sans-serif"], ["Serif", "serif"], ["Monospace", "monospace"]] as const) {
-    const option = ownerDocument.createElement("option");
+    const option = ownerDocument.createEl('option');
     option.value = value;
     option.textContent = label;
     option.selected = style.fontFamily === value;
@@ -37,7 +37,7 @@ export function textMenu(
   }, { signal });
   field("Font", font);
 
-  const color = ownerDocument.createElement("input");
+  const color = ownerDocument.createEl('input');
   color.type = "color";
   color.value = style.color;
   color.addEventListener("pointerdown", () => onPointerDown?.(), { signal });
@@ -47,7 +47,7 @@ export function textMenu(
   }, { signal });
   field("Color", color);
 
-  const size = ownerDocument.createElement("input");
+  const size = ownerDocument.createEl('input');
   size.type = "number";
   size.min = "8";
   size.max = "144";
@@ -61,10 +61,10 @@ export function textMenu(
   }, { signal });
   field("Size", size);
 
-  const styles = ownerDocument.createElement("div");
+  const styles = ownerDocument.createDiv();
   styles.className = "native-pdf-handwriting-text-style-buttons";
   for (const [label, key] of [["Bold", "bold"], ["Italic", "italic"], ["Strike-through", "strikethrough"]] as const) {
-    const button = ownerDocument.createElement("button");
+    const button = ownerDocument.createEl('button');
     button.type = "button";
     button.textContent = label;
     button.setAttribute("aria-pressed", String(style[key]));

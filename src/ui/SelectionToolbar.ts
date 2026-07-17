@@ -27,15 +27,15 @@ export class SelectionToolbar {
   private drag: { pointerId: number; offsetX: number; offsetY: number } | null = null;
 
   constructor(callbacks: SelectionToolbarCallbacks, doc: Document = activeDocument) {
-    this.element = doc.createElement("div");
+    this.element = doc.createDiv();
     this.element.className = "native-pdf-handwriting-selection-toolbar";
     this.element.dataset.focusOverlayInternal = "true";
     this.element.setAttribute("role", "toolbar");
     this.element.setAttribute("aria-label", "Selected strokes");
-    this.dragHandle = doc.createElement("span");
+    this.dragHandle = doc.createSpan();
     this.dragHandle.className = "native-pdf-handwriting-selection-toolbar-drag";
     this.dragHandle.setAttribute("aria-label", "Drag selection toolbar");
-    this.count = doc.createElement("span");
+    this.count = doc.createSpan();
     this.count.className = "native-pdf-handwriting-selection-toolbar-count";
     this.dragHandle.append(this.count);
     this.element.append(
@@ -43,7 +43,7 @@ export class SelectionToolbar {
       this.button(doc, "Delete", () => callbacks.onDelete()),
       this.button(doc, "Duplicate", () => callbacks.onDuplicate())
     );
-    const color = doc.createElement("input");
+    const color = doc.createEl('input');
     color.type = "color";
     color.setAttribute("aria-label", "Recolor selected strokes");
     color.addEventListener("input", () => callbacks.onRecolor(color.value), { signal: this.abort.signal });
@@ -164,7 +164,7 @@ export class SelectionToolbar {
   };
 
   private button(doc: Document, label: string, action: () => void): HTMLButtonElement {
-    const button = doc.createElement("button");
+    const button = doc.createEl('button');
     button.type = "button";
     button.textContent = label;
     button.addEventListener("click", action, { signal: this.abort.signal });

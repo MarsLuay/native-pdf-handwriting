@@ -43,7 +43,7 @@ export class DropdownController {
     this.currentId = id;
     this.trigger = trigger;
     this.abort = new AbortController();
-    const popup = this.ownerDocument.createElement("div");
+    const popup = this.ownerDocument.createDiv();
     popup.className = "native-pdf-handwriting-dropdown";
     popup.dataset.focusOverlayInternal = "true";
     popup.setAttribute("role", "menu");
@@ -83,7 +83,7 @@ export class DropdownController {
   }
 
   private optionButton(option: DropdownOption): HTMLButtonElement {
-    const button = this.ownerDocument.createElement("button");
+    const button = this.ownerDocument.createEl('button');
     button.type = "button";
     button.className = "native-pdf-handwriting-dropdown-option";
     button.dataset.optionId = option.id;

@@ -47,7 +47,7 @@ export function drawingOptions(
     label: `${labels[index]} (${width})`,
     active: drawing.width === width,
     render: (button) => {
-      const preview = button.ownerDocument.createElement("span");
+      const preview = button.ownerDocument.createSpan();
       preview.className = "native-pdf-handwriting-width-preview";
       setElementCssProps(preview, {
         "--ink-preview-width": `${Math.min(12, width)}px`,
@@ -68,13 +68,13 @@ export function drawingAdvanced(
 ): HTMLElement {
   const tool = resolveDrawingTool(preferences.activeTool);
   const drawing = preferences[tool];
-  const details = ownerDocument.createElement("details");
+  const details = ownerDocument.createEl('details');
   details.className = "native-pdf-handwriting-advanced";
-  const summary = ownerDocument.createElement("summary");
+  const summary = ownerDocument.createEl('summary');
   summary.textContent = "Advanced settings";
   details.append(summary);
-  const shapeRecognition = ownerDocument.createElement("label");
-  const shapeRecognitionInput = ownerDocument.createElement("input");
+  const shapeRecognition = ownerDocument.createEl('label');
+  const shapeRecognitionInput = ownerDocument.createEl('input');
   shapeRecognitionInput.type = "checkbox";
   shapeRecognitionInput.checked = preferences.shape.holdToRecognize;
   shapeRecognitionInput.dataset.setting = "shape-recognition";
@@ -91,9 +91,9 @@ export function drawingAdvanced(
   ];
   for (const [label, key, min, max, step] of fields) {
     if (tool === "highlighter" && key === "textureStrength") continue;
-    const wrapper = ownerDocument.createElement("label");
+    const wrapper = ownerDocument.createEl('label');
     wrapper.textContent = label;
-    const input = ownerDocument.createElement("input");
+    const input = ownerDocument.createEl('input');
     input.type = "range";
     input.min = String(min);
     input.max = String(max);
@@ -112,8 +112,8 @@ export function drawingAdvanced(
     ["Simulate mouse pressure", "simulateMousePressure"]
   ] as const) {
     if (tool === "highlighter" && key === "tiltSensitivity") continue;
-    const wrapper = ownerDocument.createElement("label");
-    const input = ownerDocument.createElement("input");
+    const wrapper = ownerDocument.createEl('label');
+    const input = ownerDocument.createEl('input');
     input.type = "checkbox";
     input.checked = drawing[key];
     input.addEventListener("change", () => {
@@ -123,10 +123,10 @@ export function drawingAdvanced(
     wrapper.append(input, label);
     details.append(wrapper);
   }
-  const stabilization = ownerDocument.createElement("select");
+  const stabilization = ownerDocument.createEl('select');
   stabilization.setAttribute("aria-label", "Stabilization");
   for (const value of ["off", "low", "medium", "high"] as const) {
-    const option = ownerDocument.createElement("option");
+    const option = ownerDocument.createEl('option');
     option.value = value;
     option.textContent = value[0]?.toUpperCase() + value.slice(1);
     option.selected = drawing.stabilization === value;
@@ -137,7 +137,7 @@ export function drawingAdvanced(
     onChange();
   }, { signal });
   details.append(stabilization);
-  const restore = ownerDocument.createElement("button");
+  const restore = ownerDocument.createEl('button');
   restore.type = "button";
   restore.textContent = "Restore tool defaults";
   restore.addEventListener("click", () => {

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.10 — 2026-07-17
+
+- Expose `getSettingDefinitions()` so Obsidian 1.13+ settings search can index Handwriting Natively toggles while still routing changes through `persistPatch`.
+- Prefer Obsidian `createEl` / `createDiv` / `createSpan` / `createSvg` helpers over `document.createElement` (marketplace `prefer-create-el`).
+
 ## 0.1.9 — 2026-07-17
 
 - Add sidecar-backed rich text annotations with in-editor text styling and a Text toolbar dropdown.

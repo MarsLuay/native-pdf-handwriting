@@ -26,7 +26,7 @@ export function laserWidthOptions(
     label: `${LASER_WIDTH_LABELS[index]} (${value})`,
     active: width === value,
     render: (button) => {
-      const preview = button.ownerDocument.createElement("span");
+      const preview = button.ownerDocument.createSpan();
       preview.className = "native-pdf-handwriting-width-preview";
       setElementCssProps(preview, {
         "--ink-preview-width": `${Math.min(12, value)}px`,
@@ -44,10 +44,10 @@ export function laserMenu(
   onChange: () => void,
   signal: AbortSignal
 ): HTMLElement {
-  const content = ownerDocument.createElement("div");
+  const content = ownerDocument.createDiv();
   content.className = "native-pdf-handwriting-laser-menu";
 
-  const note = ownerDocument.createElement("p");
+  const note = ownerDocument.createEl('p');
   note.className = "native-pdf-handwriting-laser-note";
   note.textContent = "Laser strokes fade away and are never saved.";
   content.append(note);
@@ -70,7 +70,7 @@ export function laserMenu(
     syncWidthChecks();
     onChange();
   })) {
-    const button = ownerDocument.createElement("button");
+    const button = ownerDocument.createEl('button');
     button.type = "button";
     button.className = "native-pdf-handwriting-dropdown-option";
     button.dataset.optionId = option.id;
@@ -91,12 +91,12 @@ export function laserMenu(
     min: number,
     max: number
   ): void => {
-    const label = ownerDocument.createElement("label");
+    const label = ownerDocument.createEl('label');
     label.className = "native-pdf-handwriting-laser-range";
     label.textContent = labelText;
-    const value = ownerDocument.createElement("span");
+    const value = ownerDocument.createSpan();
     value.className = "native-pdf-handwriting-laser-range-value";
-    const input = ownerDocument.createElement("input");
+    const input = ownerDocument.createEl('input');
     input.type = "range";
     input.min = String(min);
     input.max = String(max);

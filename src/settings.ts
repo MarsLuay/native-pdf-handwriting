@@ -38,6 +38,213 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
     super(app, host);
   }
 
+  /**
+   * Obsidian 1.13+ settings search + declarative render. Uses `render` (not
+   * `control.key`) so changes still go through {@link persistPatch} / host
+   * `saveSettings` (toolbar remount + boosted zoom).
+   */
+  getSettingDefinitions() {
+    return [
+      {
+        name: "Autosave",
+        desc: "Save completed edits automatically. Enabled by default.",
+        render: (setting: Setting) => {
+          setting.addToggle((toggle) =>
+            toggle.setValue(this.host.settings.autosave).onChange(async (value) => {
+              await this.persistPatch({ autosave: value });
+            })
+          );
+        }
+      },
+      {
+        name: "Autosave delay",
+        desc: "Wait 100–60,000 milliseconds after an edit before saving the sidecar.",
+        render: (setting: Setting) => {
+          this.addDelayInput(setting, {
+            descriptionId: "native-pdf-handwriting-autosave-delay-description",
+            value: this.host.settings.autosaveDelayMs,
+            min: 100,
+            max: 60_000,
+            persist: async (autosaveDelayMs) => this.persistPatch({ autosaveDelayMs })
+          });
+        }
+      },
+      {
+        name: "Save when closing a PDF",
+        desc: "Flush pending autosaves before a PDF view closes.",
+        render: (setting: Setting) => {
+          setting.addToggle((toggle) =>
+            toggle.setValue(this.host.settings.saveWhenClosing).onChange(async (value) => {
+              await this.persistPatch({ saveWhenClosing: value });
+            })
+          );
+        }
+      },
+      {
+        name: "Show save-status indicator",
+        desc: "Show whether the current PDF is saved, saving, or needs attention.",
+        render: (setting: Setting) => {
+          setting.addToggle((toggle) =>
+            toggle.setValue(this.host.settings.showSaveStatus).onChange(async (value) => {
+              await this.persistPatch({ showSaveStatus: value });
+            })
+          );
+        }
+      },
+      {
+        type: "group" as const,
+        heading: "PDF navigation",
+        items: [
+          {
+            name: "Drag to scroll when draw mode is off",
+            desc: "Vertical mouse drag on empty PDF areas scrolls the document. Text selection and links still work normally.",
+            render: (setting: Setting) => {
+              setting.addToggle((toggle) =>
+                toggle.setValue(this.host.settings.mouseDragScroll).onChange(async (value) => {
+                  await this.persistPatch({ mouseDragScroll: value });
+                })
+              );
+            }
+          },
+          {
+            name: "Ink toolbar placement",
+            desc: "Put the ink controls on the PDF toolbar, or as a left/right sidebar beside the pages.",
+            render: (setting: Setting) => {
+              setting.addDropdown((dropdown) =>
+                dropdown
+                  .addOption("main", "PDF toolbar (default)")
+                  .addOption("left", "Left sidebar")
+                  .addOption("right", "Right sidebar")
+                  .setValue(this.host.settings.toolbarPlacement)
+                  .onChange(async (value) => {
+                    if (value === "main" || value === "left" || value === "right") {
+                      await this.persistPatch({ toolbarPlacement: value });
+                    }
+                  })
+              );
+            }
+          }
+        ]
+      },
+      {
+        type: "group" as const,
+        heading: "Drawing",
+        items: [
+          {
+            name: "Simplify strokes on release",
+            desc: "Snap finished ink to cleaner straight segments. Off keeps the exact path you drew.",
+            render: (setting: Setting) => {
+              setting.addToggle((toggle) =>
+                toggle.setValue(this.host.settings.simplifyStrokes).onChange(async (value) => {
+                  await this.persistPatch({ simplifyStrokes: value });
+                })
+              );
+            }
+          },
+          {
+            name: "Retry failed autosaves",
+            desc: "Try saving again after an automatic save fails.",
+            render: (setting: Setting) => {
+              setting.addToggle((toggle) =>
+                toggle.setValue(this.host.settings.retryFailedAutosaves).onChange(async (value) => {
+                  await this.persistPatch({ retryFailedAutosaves: value });
+                })
+              );
+            }
+          }
+        ]
+      },
+      {
+        type: "group" as const,
+        heading: "Storage",
+        items: [
+          {
+            name: "Annotation sidecar folder",
+            desc: "Vault-relative folder for editable annotation JSON. The original PDF is never changed; export creates a separate copy.",
+            render: (setting: Setting) => {
+              this.addFolderPathInput(setting, {
+                value: this.host.settings.sidecarFolder,
+                persist: async (sidecarFolder) => this.persistPatch({ sidecarFolder })
+              });
+            }
+          }
+        ]
+      },
+      {
+        type: "group" as const,
+        heading: "Advanced settings",
+        items: [
+          {
+            name: "Allow 25× PDF zoom",
+            desc: "Increase the PDF viewer zoom limit beyond Obsidian's normal 10× cap. This can use substantially more memory on large pdfs.",
+            render: (setting: Setting) => {
+              setting.addToggle((toggle) =>
+                toggle.setValue(this.host.settings.boostedPdfZoom).onChange(async (value) => {
+                  await this.persistPatch({ boostedPdfZoom: value });
+                })
+              );
+            }
+          },
+          {
+            name: "Hide stylus annotation label",
+            desc: "Remove the invisible page label announced to screen readers when the annotation canvas is focused.",
+            render: (setting: Setting) => {
+              setting.addToggle((toggle) =>
+                toggle.setValue(this.host.settings.hideStylusAnnotationLabel).onChange(async (value) => {
+                  await this.persistPatch({ hideStylusAnnotationLabel: value });
+                })
+              );
+            }
+          },
+          {
+            name: "Vault debug log",
+            desc: "Append every plugin event to a line-delimited log file in the vault so agents can read it directly. Off by default. Includes left-toolbar PDF sidebar offset diagnostics (reason, rects, jumps).",
+            render: (setting: Setting) => {
+              setting.addToggle((toggle) =>
+                toggle.setValue(this.host.settings.vaultDebugLog).onChange(async (value) => {
+                  await this.persistPatch({ vaultDebugLog: value });
+                })
+              );
+            }
+          },
+          {
+            name: "Vault debug log path",
+            desc: "Vault-relative location for the optional debug log. One JSON object per line.",
+            render: (setting: Setting) => {
+              this.addFolderPathInput(setting, {
+                value: this.host.settings.vaultDebugLogPath,
+                persist: async (vaultDebugLogPath) => this.persistPatch({ vaultDebugLogPath }),
+                fileName: "debug.log"
+              });
+            }
+          },
+          {
+            name: "Copy all logs",
+            desc: "Copy the complete vault debug log. Enable vault debug log and reproduce an issue first to capture new events.",
+            render: (setting: Setting) => {
+              setting.addButton((button) =>
+                button.setButtonText("Copy logs").onClick(async () => {
+                  try {
+                    const logs = await this.host.readAllLogs();
+                    if (!logs) {
+                      new Notice("No vault debug logs are available. Enable vault debug log and reproduce the issue first.");
+                      return;
+                    }
+                    await navigator.clipboard.writeText(logs);
+                    new Notice("All debug logs copied.");
+                  } catch (error) {
+                    console.error("Handwriting Natively could not copy logs", error);
+                    new Notice("Could not copy logs. Check clipboard permission and try again.");
+                  }
+                })
+              );
+            }
+          }
+        ]
+      }
+    ];
+  }
+
   display(): void {
     const { containerEl } = this;
     containerEl.empty();

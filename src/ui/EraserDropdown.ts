@@ -18,19 +18,19 @@ export function eraserMenu(
   callbacks: EraserMenuCallbacks,
   signal: AbortSignal
 ): HTMLElement {
-  const content = ownerDocument.createElement("div");
+  const content = ownerDocument.createDiv();
   content.className = "native-pdf-handwriting-eraser-menu";
 
-  const previewFrame = ownerDocument.createElement("div");
+  const previewFrame = ownerDocument.createDiv();
   previewFrame.className = "native-pdf-handwriting-eraser-preview-frame";
   setElementCssProps(previewFrame, { "--ink-eraser-preview-frame-size": `${ERASER_SIZE_MAX}px` });
 
-  const preview = ownerDocument.createElement("span");
+  const preview = ownerDocument.createSpan();
   preview.className = "native-pdf-handwriting-eraser-preview";
   preview.setAttribute("aria-hidden", "true");
   previewFrame.append(preview);
 
-  const value = ownerDocument.createElement("span");
+  const value = ownerDocument.createSpan();
   value.className = "native-pdf-handwriting-eraser-size-value";
 
   const updatePreview = (size: number): void => {
@@ -38,11 +38,11 @@ export function eraserMenu(
     value.textContent = `${size}px`;
   };
 
-  const label = ownerDocument.createElement("label");
+  const label = ownerDocument.createEl('label');
   label.className = "native-pdf-handwriting-eraser-size-label";
   label.textContent = "Eraser size";
 
-  const slider = ownerDocument.createElement("input");
+  const slider = ownerDocument.createEl('input');
   slider.type = "range";
   slider.min = String(ERASER_SIZE_MIN);
   slider.max = String(ERASER_SIZE_MAX);
@@ -63,15 +63,15 @@ export function eraserMenu(
   }, { signal });
 
   label.append(slider, value);
-  const wholeStrokeLabel = ownerDocument.createElement("label");
-  const wholeStroke = ownerDocument.createElement("input");
+  const wholeStrokeLabel = ownerDocument.createEl('label');
+  const wholeStroke = ownerDocument.createEl('input');
   wholeStroke.type = "checkbox";
   wholeStroke.checked = preferences.eraser.eraseWholeStrokes;
   wholeStroke.dataset.control = "eraser-whole-stroke";
   wholeStroke.addEventListener("change", () => callbacks.onWholeStrokeChange(wholeStroke.checked), { signal });
   wholeStrokeLabel.append(wholeStroke, " Erase whole strokes");
-  const rightMouseLabel = ownerDocument.createElement("label");
-  const rightMouse = ownerDocument.createElement("input");
+  const rightMouseLabel = ownerDocument.createEl('label');
+  const rightMouse = ownerDocument.createEl('input');
   rightMouse.type = "checkbox";
   rightMouse.checked = preferences.eraser.eraseWithRightMouseButton;
   rightMouse.dataset.control = "eraser-right-mouse";

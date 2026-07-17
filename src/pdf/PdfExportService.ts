@@ -367,7 +367,7 @@ export class PdfExportService {
     fontScale: number
   ): Promise<PDFImage | undefined> {
     if (typeof activeDocument === "undefined") return undefined;
-    const canvas = activeDocument.createElement("canvas");
+    const canvas = activeDocument.createEl('canvas');
     const context = canvas.getContext("2d");
     const pixelScale = 2;
     if (!context || typeof canvas.toDataURL !== "function") return undefined;

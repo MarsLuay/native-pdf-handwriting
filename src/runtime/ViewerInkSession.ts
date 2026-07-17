@@ -1425,12 +1425,12 @@ export class ViewerInkSession {
     this.claimInputOwner(page.element, page.pageNumber);
     this.rememberPageMetrics(page);
     const overlay = this.options.adapter.mountOverlay(page.pageNumber);
-    const canvas = overlay.ownerDocument.createElement("canvas");
+    const canvas = overlay.ownerDocument.createEl('canvas');
     canvas.className = "native-pdf-handwriting-canvas";
     if (this.options.settings.hideStylusAnnotationLabel) canvas.setAttribute("aria-hidden", "true");
     else canvas.setAttribute("aria-label", `Annotations for PDF page ${page.pageNumber}`);
     overlay.append(canvas);
-    const textLayer = overlay.ownerDocument.createElement("div");
+    const textLayer = overlay.ownerDocument.createDiv();
     textLayer.className = "native-pdf-handwriting-text-layer";
     overlay.append(textLayer);
     const context = canvas.getContext("2d");
@@ -2134,7 +2134,7 @@ export class ViewerInkSession {
       ? storedRuns
       : plainTextToRuns(annotation.text, style);
     const insertionStyle = { ...(styleAtTextOffset(runs, runs.reduce((length, run) => length + run.text.length, 0)) ?? style) };
-    const element = surface.overlay.ownerDocument.createElement("div");
+    const element = surface.overlay.ownerDocument.createDiv();
     const abort = new AbortController();
     element.className = "native-pdf-handwriting-text-input";
     element.contentEditable = "true";
@@ -2582,7 +2582,7 @@ export class ViewerInkSession {
     const selected = new Set(this.selectedTexts.map((text) => text.id));
     if (this.syncCurrentTextBoxes(surface, annotations, selected)) return;
     const boxes = annotations.map((annotation) => {
-      const box = surface.overlay.ownerDocument.createElement("div");
+      const box = surface.overlay.ownerDocument.createDiv();
       box.className = "native-pdf-handwriting-text-box";
       box.dataset.annotationId = annotation.id;
       box.dataset.annotationSignature = this.textBoxRenderSignature(annotation, selected.has(annotation.id));
@@ -2717,14 +2717,14 @@ export class ViewerInkSession {
   /** NPDE-style frame: edge strips move, circular dots resize. */
   private attachTextBoxOutline(surface: PageSurface, box: HTMLElement, annotation: PdfTextAnnotation): void {
     if (!this.drawEnabled) return;
-    const outline = box.ownerDocument.createElement("div");
+    const outline = box.ownerDocument.createDiv();
     outline.className = "native-pdf-handwriting-text-selection-frame native-pdf-handwriting-selection-control";
     outline.dataset.annotationId = annotation.id;
     outline.setAttribute("aria-hidden", "true");
     this.layoutTextBoxOutline(surface, outline, annotation, annotation);
 
     const addControl = (kind: "move" | "resize", handle: TextBoxHandle): void => {
-      const control = box.ownerDocument.createElement("div");
+      const control = box.ownerDocument.createDiv();
       control.className = `native-pdf-handwriting-text-${kind}-${handle} native-pdf-handwriting-selection-control`;
       control.dataset.handle = handle;
       control.setAttribute("aria-label", kind === "move" ? "Move text box" : `Resize text box ${handle}`);
@@ -3198,7 +3198,7 @@ export class ViewerInkSession {
     backingScale: number
   ): CanvasRenderingContext2D {
     if (!surface.inkLayer || !surface.inkLayerContext) {
-      surface.inkLayer = surface.overlay.ownerDocument.createElement("canvas");
+      surface.inkLayer = surface.overlay.ownerDocument.createEl('canvas');
       surface.inkLayerContext = surface.inkLayer.getContext("2d");
       if (!surface.inkLayerContext) throw new Error("Canvas 2D rendering is unavailable");
       surface.inkLayerValid = false;
@@ -3235,7 +3235,7 @@ export class ViewerInkSession {
       ? surface.inkLayer
       : surface.canvas;
     if (!src.width || !src.height) return null;
-    const snap = surface.overlay.ownerDocument.createElement("canvas");
+    const snap = surface.overlay.ownerDocument.createEl('canvas');
     snap.width = src.width;
     snap.height = src.height;
     const ctx = snap.getContext("2d");

@@ -18,7 +18,7 @@ const BLOCK_TAGS = new Set(["ADDRESS", "ARTICLE", "ASIDE", "BLOCKQUOTE", "DIV", 
 export function renderTextRuns(root: HTMLElement, runs: readonly PdfTextRun[], scale = 1): void {
   const ownerDocument = root.ownerDocument;
   const fragments = normalizeTextRuns(runs).map((run) => {
-    const span = ownerDocument.createElement("span");
+    const span = ownerDocument.createSpan();
     span.className = "native-pdf-handwriting-text-run";
     span.dataset[STYLE_DATASET_KEY] = JSON.stringify(styleFromRun(run));
     applyRunStyle(span, run, scale);
@@ -104,7 +104,7 @@ export function insertStyledText(root: HTMLElement, text: string, style: TextSty
   if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return null;
   const start = boundaryOffset(root, range.startContainer, range.startOffset);
   range.deleteContents();
-  const span = root.ownerDocument.createElement("span");
+  const span = root.ownerDocument.createSpan();
   span.className = "native-pdf-handwriting-text-run";
   span.dataset[STYLE_DATASET_KEY] = JSON.stringify(style);
   applyRunStyle(span, style, scale);

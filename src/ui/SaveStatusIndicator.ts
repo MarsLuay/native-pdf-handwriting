@@ -12,11 +12,11 @@ export class SaveStatusIndicator {
   private readonly dot: HTMLElement;
 
   constructor(ownerDocument: Document = activeDocument) {
-    this.element = ownerDocument.createElement("span");
+    this.element = ownerDocument.createSpan();
     this.element.className = "native-pdf-handwriting-save-status";
     this.element.setAttribute("role", "status");
     this.element.setAttribute("aria-live", "polite");
-    this.dot = ownerDocument.createElement("span");
+    this.dot = ownerDocument.createSpan();
     this.dot.className = "native-pdf-handwriting-save-status-dot";
     this.dot.setAttribute("aria-hidden", "true");
     this.element.append(this.dot);

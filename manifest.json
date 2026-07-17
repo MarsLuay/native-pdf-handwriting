@@ -1,7 +1,7 @@
 {
 	"id": "native-pdf-handwriting",
 	"name": "Handwriting Natively",
-	"version": "0.1.9",
+	"version": "0.1.10",
 	"minAppVersion": "1.13.0",
 	"description": "PDF handwriting. Use your apple pencil/stylus to write in PDFs natively as the higher powers intended.",
 	"author": "Mars",
