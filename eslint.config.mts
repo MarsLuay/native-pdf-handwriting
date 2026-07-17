@@ -17,5 +17,12 @@ export default defineConfig([
         tsconfigRootDir: import.meta.dirname,
       },
     },
+    rules: {
+      // recommended 0.4.1 turns this off; keep it on for popout-window safety + code-analysis policy.
+      "obsidianmd/prefer-active-doc": "error",
+      "obsidianmd/prefer-create-el": "error",
+      "obsidianmd/settings-tab/prefer-setting-definitions": "error",
+      "obsidianmd/settings-tab/no-deprecated-display": "error",
+    },
   },
 ]);

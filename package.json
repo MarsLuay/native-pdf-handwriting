@@ -1,6 +1,6 @@
 {
   "name": "handwriting-natively",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "PDF handwriting. Use your apple pencil/stylus to write in PDFs natively as the higher powers intended.",
   "main": "main.js",
   "type": "module",
@@ -28,7 +28,7 @@
     "@types/node": "^26.1.1",
     "esbuild": "^0.28.1",
     "eslint": "^9.30.1",
-    "eslint-plugin-obsidianmd": "^0.3.0",
+    "eslint-plugin-obsidianmd": "^0.4.1",
     "jiti": "^2.7.0",
     "jsdom": "^29.1.1",
     "obsidian": "latest",

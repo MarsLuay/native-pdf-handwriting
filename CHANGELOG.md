@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.11 — 2026-07-17
+
+- Remove leftover `PluginSettingTab.display()` now that `getSettingDefinitions()` owns settings UI on `minAppVersion` 1.13.0+ (`obsidianmd/settings-tab/no-deprecated-display`).
+- Keep About copy and Support links as declarative setting rows; bump `eslint-plugin-obsidianmd` to 0.4.1.
+
 ## 0.1.10 — 2026-07-17
 
 - Expose `getSettingDefinitions()` so Obsidian 1.13+ settings search can index Handwriting Natively toggles while still routing changes through `persistPatch`.

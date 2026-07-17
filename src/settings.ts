@@ -41,10 +41,17 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
   /**
    * Obsidian 1.13+ settings search + declarative render. Uses `render` (not
    * `control.key`) so changes still go through {@link persistPatch} / host
-   * `saveSettings` (toolbar remount + boosted zoom).
+   * `saveSettings` (toolbar remount + boosted zoom). With
+   * `minAppVersion` ≥ 1.13.0, do not keep a leftover `display()` — Obsidian
+   * bypasses it once this method exists.
    */
   getSettingDefinitions() {
     return [
+      {
+        name: "About",
+        desc: "PDF handwriting for a stylus or mouse. Write directly in the document view while keeping the original file untouched.",
+        searchable: false
+      },
       {
         name: "Autosave",
         desc: "Save completed edits automatically. Enabled by default.",
@@ -241,193 +248,33 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
             }
           }
         ]
+      },
+      {
+        name: "Support",
+        searchable: false,
+        render: (setting: Setting) => {
+          const supportLinks = setting.controlEl.createDiv({ cls: "native-pdf-handwriting-support-links" });
+          supportLinks.createEl("a", {
+            cls: "native-pdf-handwriting-support-link",
+            text: "Report bug",
+            attr: {
+              href: "https://github.com/MarsLuay/handwriting-natively/issues",
+              rel: "noopener noreferrer",
+              target: "_blank"
+            }
+          });
+          supportLinks.createEl("a", {
+            cls: "native-pdf-handwriting-support-link",
+            text: "Buy me a coffee",
+            attr: {
+              href: "https://buymeacoffee.com/marwanluaye",
+              rel: "noopener noreferrer",
+              target: "_blank"
+            }
+          });
+        }
       }
     ];
-  }
-
-  display(): void {
-    const { containerEl } = this;
-    containerEl.empty();
-
-    containerEl.createEl("p", {
-      text: "PDF handwriting for a stylus or mouse. Write directly in the document view while keeping the original file untouched."
-    });
-
-    new Setting(containerEl)
-      .setName("Autosave")
-      .setDesc("Save completed edits automatically. Enabled by default.")
-      .addToggle((toggle) =>
-        toggle.setValue(this.host.settings.autosave).onChange(async (value) => {
-          await this.persistPatch({ autosave: value });
-        })
-      );
-
-    const autosaveDelaySetting = new Setting(containerEl)
-      .setName("Autosave delay")
-      .setDesc("Wait 100–60,000 milliseconds after an edit before saving the sidecar.");
-    this.addDelayInput(autosaveDelaySetting, {
-      descriptionId: "native-pdf-handwriting-autosave-delay-description",
-      value: this.host.settings.autosaveDelayMs,
-      min: 100,
-      max: 60_000,
-      persist: async (autosaveDelayMs) => this.persistPatch({ autosaveDelayMs })
-    });
-
-    new Setting(containerEl)
-      .setName("Save when closing a PDF")
-      .setDesc("Flush pending autosaves before a PDF view closes.")
-      .addToggle((toggle) =>
-        toggle.setValue(this.host.settings.saveWhenClosing).onChange(async (value) => {
-          await this.persistPatch({ saveWhenClosing: value });
-        })
-      );
-
-    new Setting(containerEl)
-      .setName("Show save-status indicator")
-      .setDesc("Show whether the current PDF is saved, saving, or needs attention.")
-      .addToggle((toggle) =>
-        toggle.setValue(this.host.settings.showSaveStatus).onChange(async (value) => {
-          await this.persistPatch({ showSaveStatus: value });
-        })
-      );
-
-    new Setting(containerEl).setName("PDF navigation").setHeading();
-    new Setting(containerEl)
-      .setName("Drag to scroll when draw mode is off")
-      .setDesc("Vertical mouse drag on empty PDF areas scrolls the document. Text selection and links still work normally.")
-      .addToggle((toggle) =>
-        toggle.setValue(this.host.settings.mouseDragScroll).onChange(async (value) => {
-          await this.persistPatch({ mouseDragScroll: value });
-        })
-      );
-
-    new Setting(containerEl)
-      .setName("Ink toolbar placement")
-      .setDesc("Put the ink controls on the PDF toolbar, or as a left/right sidebar beside the pages.")
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOption("main", "PDF toolbar (default)")
-          .addOption("left", "Left sidebar")
-          .addOption("right", "Right sidebar")
-          .setValue(this.host.settings.toolbarPlacement)
-          .onChange(async (value) => {
-            if (value === "main" || value === "left" || value === "right") {
-              await this.persistPatch({ toolbarPlacement: value });
-            }
-          })
-      );
-
-    new Setting(containerEl).setName("Drawing").setHeading();
-    new Setting(containerEl)
-      .setName("Simplify strokes on release")
-      .setDesc("Snap finished ink to cleaner straight segments. Off keeps the exact path you drew.")
-      .addToggle((toggle) =>
-        toggle.setValue(this.host.settings.simplifyStrokes).onChange(async (value) => {
-          await this.persistPatch({ simplifyStrokes: value });
-        })
-      );
-
-    new Setting(containerEl)
-      .setName("Retry failed autosaves")
-      .setDesc("Try saving again after an automatic save fails.")
-      .addToggle((toggle) =>
-        toggle.setValue(this.host.settings.retryFailedAutosaves).onChange(async (value) => {
-          await this.persistPatch({ retryFailedAutosaves: value });
-        })
-      );
-
-    new Setting(containerEl).setName("Storage").setHeading();
-    this.addFolderPathInput(
-      new Setting(containerEl)
-        .setName("Annotation sidecar folder")
-        .setDesc("Vault-relative folder for editable annotation JSON. The original PDF is never changed; export creates a separate copy."),
-      {
-        value: this.host.settings.sidecarFolder,
-        persist: async (sidecarFolder) => this.persistPatch({ sidecarFolder })
-      }
-    );
-
-    const advanced = containerEl.createEl("details", { cls: "native-pdf-handwriting-advanced-settings" });
-    advanced.createEl("summary", { text: "Advanced settings" });
-    const advancedContent = advanced.createDiv({ cls: "native-pdf-handwriting-advanced-settings-content" });
-
-    new Setting(advancedContent)
-      .setName("Allow 25× PDF zoom")
-      .setDesc("Increase the PDF viewer zoom limit beyond Obsidian's normal 10× cap. This can use substantially more memory on large pdfs.")
-      .addToggle((toggle) =>
-        toggle.setValue(this.host.settings.boostedPdfZoom).onChange(async (value) => {
-          await this.persistPatch({ boostedPdfZoom: value });
-        })
-      );
-
-    new Setting(advancedContent)
-      .setName("Hide stylus annotation label")
-      .setDesc("Remove the invisible page label announced to screen readers when the annotation canvas is focused.")
-      .addToggle((toggle) =>
-        toggle.setValue(this.host.settings.hideStylusAnnotationLabel).onChange(async (value) => {
-          await this.persistPatch({ hideStylusAnnotationLabel: value });
-        })
-      );
-
-    new Setting(advancedContent)
-      .setName("Vault debug log")
-      .setDesc("Append every plugin event to a line-delimited log file in the vault so agents can read it directly. Off by default. Includes left-toolbar PDF sidebar offset diagnostics (reason, rects, jumps).")
-      .addToggle((toggle) =>
-        toggle.setValue(this.host.settings.vaultDebugLog).onChange(async (value) => {
-          await this.persistPatch({ vaultDebugLog: value });
-        })
-      );
-
-    this.addFolderPathInput(
-      new Setting(advancedContent)
-        .setName("Vault debug log path")
-        .setDesc("Vault-relative location for the optional debug log. One JSON object per line."),
-      {
-        value: this.host.settings.vaultDebugLogPath,
-        persist: async (vaultDebugLogPath) => this.persistPatch({ vaultDebugLogPath }),
-        fileName: "debug.log"
-      }
-    );
-
-    new Setting(advancedContent)
-      .setName("Copy all logs")
-      .setDesc("Copy the complete vault debug log. Enable vault debug log and reproduce an issue first to capture new events.")
-      .addButton((button) =>
-        button.setButtonText("Copy logs").onClick(async () => {
-          try {
-            const logs = await this.host.readAllLogs();
-            if (!logs) {
-              new Notice("No vault debug logs are available. Enable vault debug log and reproduce the issue first.");
-              return;
-            }
-            await navigator.clipboard.writeText(logs);
-            new Notice("All debug logs copied.");
-          } catch (error) {
-            console.error("Handwriting Natively could not copy logs", error);
-            new Notice("Could not copy logs. Check clipboard permission and try again.");
-          }
-        })
-      );
-
-    const supportLinks = containerEl.createDiv({ cls: "native-pdf-handwriting-support-links" });
-    supportLinks.createEl("a", {
-      cls: "native-pdf-handwriting-support-link",
-      text: "Report bug",
-      attr: {
-        href: "https://github.com/MarsLuay/handwriting-natively/issues",
-        rel: "noopener noreferrer",
-        target: "_blank"
-      }
-    });
-    supportLinks.createEl("a", {
-      cls: "native-pdf-handwriting-support-link",
-      text: "Buy me a coffee",
-      attr: {
-        href: "https://buymeacoffee.com/marwanluaye",
-        rel: "noopener noreferrer",
-        target: "_blank"
-      }
-    });
   }
 
   private addDelayInput(
