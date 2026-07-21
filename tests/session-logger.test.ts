@@ -221,4 +221,18 @@ describe("SessionLogger", () => {
     expect(writes).toHaveLength(1);
     expect(writes[0]?.payload).toMatchObject({ phase: "selection-snapshot", sampleN: 1 });
   });
+
+  it("avoids diagnostics and their input-path sampling work when debug is disabled", () => {
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    const write = vi.fn();
+    const logger = new SessionLogger("Notes/example.pdf", { write }, () => false);
+
+    expect(logger.shouldLogPositionAlign("move")).toBe(false);
+    logger.pointerRoute("draw", { page: 1 });
+    logger.inputPaint(1, 24, "draw", 12);
+
+    expect(debug).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+    debug.mockRestore();
+  });
 });

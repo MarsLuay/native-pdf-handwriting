@@ -39,11 +39,20 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
   }
 
   /**
+   * Obsidian ≤1.12 opens settings through `display()`. 1.13+ prefers
+   * {@link getSettingDefinitions} and ignores this method when that API exists.
+   * Keep both so the tab is not blank on current stable (1.12.x).
+   */
+  display(): void {
+    const { containerEl } = this;
+    containerEl.empty();
+    this.renderSettingDefinitions(containerEl, this.getSettingDefinitions());
+  }
+
+  /**
    * Obsidian 1.13+ settings search + declarative render. Uses `render` (not
    * `control.key`) so changes still go through {@link persistPatch} / host
-   * `saveSettings` (toolbar remount + boosted zoom). With
-   * `minAppVersion` ≥ 1.13.0, do not keep a leftover `display()` — Obsidian
-   * bypasses it once this method exists.
+   * `saveSettings` (toolbar remount + boosted zoom).
    */
   getSettingDefinitions() {
     return [
@@ -275,6 +284,25 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
         }
       }
     ];
+  }
+
+  private renderSettingDefinitions(
+    containerEl: HTMLElement,
+    definitions: ReturnType<NativePdfInkSettingTab["getSettingDefinitions"]>
+  ): void {
+    for (const definition of definitions) {
+      if (definition && typeof definition === "object" && "type" in definition && definition.type === "group") {
+        new Setting(containerEl).setName(definition.heading).setHeading();
+        this.renderSettingDefinitions(containerEl, definition.items);
+        continue;
+      }
+      const setting = new Setting(containerEl);
+      if ("name" in definition && definition.name) setting.setName(definition.name);
+      if ("desc" in definition && definition.desc) setting.setDesc(definition.desc);
+      if ("render" in definition && typeof definition.render === "function") {
+        definition.render(setting);
+      }
+    }
   }
 
   private addDelayInput(

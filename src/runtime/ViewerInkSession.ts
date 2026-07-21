@@ -48,6 +48,12 @@ import { AddTextAnnotationCommand, DeleteTextAnnotationsCommand, ReplaceTextAnno
 import type { TextStyleChange } from "../ui/TextDropdown";
 import { insertStyledText, readTextRuns, renderTextRuns, rescaleTextRuns, restoreSelection, selectionOffsets, type TextSelectionOffsets } from "../text/RichTextDom";
 import { normalizeTextRuns, patchTextRunRange, plainTextFromRuns, plainTextToRuns, styleAtTextOffset } from "../text/RichTextRuns";
+import {
+  emitHnDevProbeDiagnostic,
+  isHnDevProbeActive,
+  type HnDevProbeDiagnostic,
+  type HnDevProbeMetric
+} from "./DevProbeDiagnostics";
 
 const INPUT_OWNER_REGISTRY_KEY = "__nativePdfHandwritingInputOwners";
 const detachedInputOwners = new WeakMap<HTMLElement, ViewerInkSession>();
@@ -85,6 +91,8 @@ export interface ViewerInkSessionOptions {
   simplifyStrokesEnabled?(): boolean;
   toolbarPlacement?: () => ToolbarPlacement;
   vaultLog?: VaultLogSink;
+  /** Enables diagnostics that would otherwise add avoidable input-path work. */
+  debugEnabled?: () => boolean;
   /** PDF++/viewer reload detached our DOM — plugin should drop session and rescan. */
   onDetached?: () => void;
   /** Sync filesystem writer for unload/detach — flush must not race async vault I/O. */
@@ -109,13 +117,20 @@ interface PageSurface {
   page: PdfPageInfo;
   overlay: HTMLElement;
   canvas: HTMLCanvasElement;
+  /** Ephemeral active-stroke layer. The committed ink canvas stays untouched while drawing. */
+  draftCanvas: HTMLCanvasElement;
   textLayer: HTMLElement;
   context: CanvasRenderingContext2D;
+  draftContext: CanvasRenderingContext2D;
   /** Committed-stroke cache — blit for live draw + zoom settle before HQ rebuild. */
   inkLayer: HTMLCanvasElement | null;
   inkLayerContext: CanvasRenderingContext2D | null;
   inkLayerValid: boolean;
   router: PointerRouter | null;
+  livePaintFrame: number | null;
+  pendingLivePaint: { kind: "draw" | "edit"; syncText: boolean; sampleCount: number; event?: PointerEvent } | null;
+  /** Prefix of editPath already represented by the destructive live eraser preview. */
+  liveEraserPaintedPoints: number;
   builder: StrokeBuilder | undefined;
   /** True while the live StrokeBuilder is a non-persisted laser draft. */
   laserDraft: boolean;
@@ -270,7 +285,7 @@ export class ViewerInkSession {
 
   private constructor(private readonly options: ViewerInkSessionOptions) {
     this.identity = createDocumentIdentity({ vaultPath: options.pdfPath });
-    this.logger = new SessionLogger(options.pdfPath, options.vaultLog);
+    this.logger = new SessionLogger(options.pdfPath, options.vaultLog, options.debugEnabled);
     this.textToolActive = options.settings.toolPreferences.activeTool === "text";
     this.logger.textTool("tool-initial", {
       active: this.textToolActive,
@@ -542,6 +557,27 @@ export class ViewerInkSession {
       && performance.now() - this.lastZoomSignalAt < ViewerInkSession.ZOOM_ACTIVE_MS;
   }
 
+  /**
+   * Development-only cross-plugin telemetry. The dedicated probe must opt in
+   * on this window; HN keeps no telemetry history and never writes it to the
+   * vault. Calls are lifecycle-level rather than input-path instrumentation.
+   */
+  private reportDevProbe(
+    type: HnDevProbeDiagnostic["type"],
+    metrics: Record<string, HnDevProbeMetric>
+  ): void {
+    const view = this.options.adapter.host.ownerDocument.defaultView;
+    if (!isHnDevProbeActive(view)) return;
+    emitHnDevProbeDiagnostic(view, {
+      version: 1,
+      source: "handwriting-natively",
+      type,
+      documentId: this.identity.id,
+      at: performance.now(),
+      metrics
+    });
+  }
+
   private scheduleZoomRepaint(reason: string, scale?: number): void {
     if (this.destroyed) return;
     const now = performance.now();
@@ -551,6 +587,11 @@ export class ViewerInkSession {
       this.zoomTickCount = 0;
       this.zoomBurstScaleStart = scale ?? null;
       this.zoomTextLayoutLoggedPages.clear();
+      this.reportDevProbe("zoom-burst-start", {
+        reason,
+        scale: scale ?? null,
+        surfaces: this.surfaces.size
+      });
     }
     this.zoomTickCount += 1;
     this.zoomBurstReason = reason;
@@ -590,6 +631,14 @@ export class ViewerInkSession {
         burstDurationMs,
         ...(scaleStart !== null ? { scaleStart } : {}),
         ...(scaleEnd !== null ? { scaleEnd } : {})
+      });
+      this.reportDevProbe("zoom-settled", {
+        reason: this.zoomBurstReason,
+        ticks: burstTicks,
+        durationMs: burstDurationMs,
+        scaleStart,
+        scaleEnd,
+        surfaces: this.surfaces.size
       });
       this.releaseZoomCompositeAfterNativeRender();
     }, ViewerInkSession.ZOOM_SETTLE_MS);
@@ -708,6 +757,15 @@ export class ViewerInkSession {
     const releasePending = this.zoomCompositing
       || this.zoomCompositeReleaseTimer !== null
       || this.zoomCompositeReleaseFrame !== null;
+    this.reportDevProbe("host-page-content-mutation", {
+      records: recordCount,
+      releasePending,
+      zoomCompositing: this.zoomCompositing,
+      handoff: this.isZoomHandoffActive(),
+      pageCount: pages.length,
+      detachedOverlays: detachedOverlayPages.length,
+      reattachedOverlays: reattachedOverlayPages.length
+    });
 
     // A native redraw can remove our overlay even after the compositor's
     // handoff. Recover that rare case without treating every canvas/text-layer
@@ -759,6 +817,12 @@ export class ViewerInkSession {
       surface.overlay.classList.remove("native-pdf-handwriting-zoom-compositing");
     }
     this.logger.zoomComposite("release", {
+      pages: this.surfaces.size,
+      nativeContentMutations: this.zoomNativeContentMutations,
+      heldAfterSettleMs: this.zoomCompositeSettledAt > 0 ? roundMs(now - this.zoomCompositeSettledAt) : null,
+      pendingUpgrades
+    });
+    this.reportDevProbe("zoom-composite-release", {
       pages: this.surfaces.size,
       nativeContentMutations: this.zoomNativeContentMutations,
       heldAfterSettleMs: this.zoomCompositeSettledAt > 0 ? roundMs(now - this.zoomCompositeSettledAt) : null,
@@ -853,6 +917,17 @@ export class ViewerInkSession {
         ...(burst.scaleEnd !== undefined ? { scaleEnd: burst.scaleEnd } : {})
       } : {})
     });
+    if (ViewerInkSession.isZoomPaintReason(reason)) {
+      this.reportDevProbe("zoom-repaint", {
+        reason,
+        durationMs,
+        pagesRepainted: stats.pagesRepainted,
+        canvasesResized: stats.canvasesResized,
+        strokesRedrawn: stats.strokesRedrawn,
+        skippedDisconnected: stats.skippedDisconnected,
+        scale: Number(view.scale.toFixed(4))
+      });
+    }
   }
 
   static async create(options: ViewerInkSessionOptions): Promise<ViewerInkSession> {
@@ -938,6 +1013,7 @@ export class ViewerInkSession {
         if (!current) {
           surface.router?.destroy();
           this.releaseInputOwner(surface.page.element);
+          this.releaseSurfaceBuffers(surface);
           surface.overlay.remove();
           this.surfaces.delete(pageNumber);
           continue;
@@ -945,6 +1021,7 @@ export class ViewerInkSession {
         if (current.element !== surface.page.element) {
           surface.router?.destroy();
           this.releaseInputOwner(surface.page.element);
+          this.releaseSurfaceBuffers(surface);
           surface.overlay.remove();
           this.surfaces.delete(pageNumber);
           continue;
@@ -952,6 +1029,7 @@ export class ViewerInkSession {
         if (!this.reattachSurface(surface, current)) {
           surface.router?.destroy();
           this.releaseInputOwner(surface.page.element);
+          this.releaseSurfaceBuffers(surface);
           surface.overlay.remove();
           this.surfaces.delete(pageNumber);
           continue;
@@ -966,6 +1044,7 @@ export class ViewerInkSession {
         if (!live.has(pageNumber)) {
           const surface = this.surfaces.get(pageNumber);
           surface?.router?.destroy();
+          if (surface) this.releaseSurfaceBuffers(surface);
           surface?.overlay.remove();
           this.surfaces.delete(pageNumber);
         }
@@ -1216,6 +1295,7 @@ export class ViewerInkSession {
   }
 
   async manualSave(): Promise<void> {
+    const started = performance.now();
     this.logger.textTool("manual-save-start", { textCount: this.texts.all().length, dirty: this.isDirty() });
     this.toolbar.setSaveStatus("saving");
     try {
@@ -1223,10 +1303,12 @@ export class ViewerInkSession {
       this.toolbar.setSaveStatus("saved", new Date());
       this.options.notice("Annotations saved.");
       this.logger.textTool("manual-save-complete", { textCount: this.texts.all().length, dirty: this.isDirty() });
+      this.reportDevProbe("manual-save", { ok: true, durationMs: roundMs(performance.now() - started), dirty: this.isDirty() });
     } catch (error) {
       this.toolbar.setSaveStatus("failed");
       this.options.notice(`Save failed: ${this.errorMessage(error)}`);
       this.logger.textTool("manual-save-error", { textCount: this.texts.all().length, error: this.errorMessage(error) });
+      this.reportDevProbe("manual-save", { ok: false, durationMs: roundMs(performance.now() - started) });
       throw error;
     }
   }
@@ -1516,6 +1598,7 @@ export class ViewerInkSession {
     for (const surface of this.surfaces.values()) {
       surface.router?.destroy();
       this.releaseInputOwner(surface.page.element);
+      this.releaseSurfaceBuffers(surface);
     }
     this.surfaces.clear();
     this.selectionToolbar.destroy();
@@ -1589,21 +1672,32 @@ export class ViewerInkSession {
     if (this.options.settings.hideStylusAnnotationLabel) canvas.setAttribute("aria-hidden", "true");
     else canvas.setAttribute("aria-label", `Annotations for PDF page ${page.pageNumber}`);
     overlay.append(canvas);
+    const draftCanvas = createDetachedEl(overlay.ownerDocument, 'canvas');
+    draftCanvas.className = "native-pdf-handwriting-draft-canvas";
+    draftCanvas.setAttribute("aria-hidden", "true");
+    overlay.append(draftCanvas);
     const textLayer = createDetachedDiv(overlay.ownerDocument);
     textLayer.className = "native-pdf-handwriting-text-layer";
     overlay.append(textLayer);
     const context = canvas.getContext("2d");
     if (!context) throw new Error("Canvas 2D rendering is unavailable");
+    const draftContext = draftCanvas.getContext("2d");
+    if (!draftContext) throw new Error("Canvas 2D rendering is unavailable");
     const surface: PageSurface = {
       page,
       overlay,
       canvas,
+      draftCanvas,
       textLayer,
       context,
+      draftContext,
       inkLayer: null,
       inkLayerContext: null,
       inkLayerValid: false,
       router: null,
+      livePaintFrame: null,
+      pendingLivePaint: null,
+      liveEraserPaintedPoints: 0,
       builder: undefined,
       laserDraft: false,
       laserDiscardedPoints: 0,
@@ -1690,6 +1784,192 @@ export class ViewerInkSession {
     });
   }
 
+  /** Coalesce visual work to display rate without dropping any input samples. */
+  private scheduleLivePaint(
+    surface: PageSurface,
+    kind: "draw" | "edit",
+    sampleCount: number,
+    event?: PointerEvent,
+    syncText = false
+  ): void {
+    if (this.destroyed) return;
+    const pending = surface.pendingLivePaint;
+    const pendingEvent = event ?? pending?.event;
+    const nextPaint = {
+      kind: pending?.kind === "edit" ? "edit" : kind,
+      syncText: Boolean(pending?.syncText || syncText),
+      sampleCount: (pending?.sampleCount ?? 0) + sampleCount
+    };
+    surface.pendingLivePaint = pendingEvent ? { ...nextPaint, event: pendingEvent } : nextPaint;
+    if (surface.livePaintFrame !== null) return;
+    const view = surface.overlay.ownerDocument.defaultView;
+    if (!view) {
+      this.paintScheduledLiveWork(surface);
+      return;
+    }
+    surface.livePaintFrame = view.requestAnimationFrame(() => {
+      surface.livePaintFrame = null;
+      this.paintScheduledLiveWork(surface);
+    });
+  }
+
+  private paintScheduledLiveWork(surface: PageSurface): void {
+    const pending = surface.pendingLivePaint;
+    surface.pendingLivePaint = null;
+    if (!pending || this.destroyed) return;
+    const startedAt = performance.now();
+    if (pending.kind === "draw") this.renderLiveDrawPreview(surface);
+    else if (surface.editTool === "eraser") this.renderLiveEraserPreview(surface);
+    else this.renderPage(surface.page.pageNumber, undefined, "live-edit", pending.syncText);
+    this.logger.inputPaint(surface.page.pageNumber, performance.now() - startedAt, pending.kind, pending.sampleCount);
+    if (pending.event && this.logger.isEnabled()) this.updateDebug(surface, pending.event);
+  }
+
+  /** A terminal input event owns the final synchronous paint, never a stale frame callback. */
+  private cancelLivePaint(surface: PageSurface): void {
+    if (surface.livePaintFrame !== null) {
+      surface.overlay.ownerDocument.defaultView?.cancelAnimationFrame(surface.livePaintFrame);
+      surface.livePaintFrame = null;
+    }
+    surface.pendingLivePaint = null;
+  }
+
+  private clearLiveDrawPreview(surface: PageSurface): void {
+    const { draftCanvas, draftContext } = surface;
+    if (!draftCanvas.width || !draftCanvas.height) return;
+    draftContext.setTransform(1, 0, 0, 1, 0, 0);
+    draftContext.clearRect(0, 0, draftCanvas.width, draftCanvas.height);
+  }
+
+  /** Drop detached page bitmaps and their scheduled work promptly. */
+  private releaseSurfaceBuffers(surface: PageSurface): void {
+    this.cancelLivePaint(surface);
+    surface.canvas.width = 0;
+    surface.canvas.height = 0;
+    surface.draftCanvas.width = 0;
+    surface.draftCanvas.height = 0;
+    if (surface.inkLayer) {
+      surface.inkLayer.width = 0;
+      surface.inkLayer.height = 0;
+    }
+    surface.inkLayer = null;
+    surface.inkLayerContext = null;
+    surface.inkLayerValid = false;
+    surface.liveEraserPaintedPoints = 0;
+  }
+
+  /**
+   * Paint the active stroke into a disposable layer. This keeps the committed
+   * canvas cache, text boxes, and full-stroke renderer out of the pointer path.
+   */
+  private renderLiveDrawPreview(surface: PageSurface): void {
+    const builder = surface.builder;
+    if (!builder || surface.laserDraft) return;
+    const layout = this.pageLayout(surface);
+    const rect = surface.overlay.getBoundingClientRect();
+    const width = Math.max(1, rect.width >= 8 ? rect.width : layout.contentWidth || 1);
+    const height = Math.max(1, rect.height >= 8 ? rect.height : layout.contentHeight || 1);
+    const { pixelWidth, pixelHeight, backingScale } = inkBackingSize(
+      width,
+      height,
+      window.devicePixelRatio || 1
+    );
+
+    // A viewport change is uncommon while drawing. Let the canonical renderer
+    // rebuild committed ink once, then keep the active stroke isolated in its
+    // draft layer rather than painting it twice.
+    if (surface.canvas.width !== pixelWidth || surface.canvas.height !== pixelHeight) {
+      this.renderPage(surface.page.pageNumber, undefined, "live-draw-rebase", false, false);
+    }
+    if (surface.draftCanvas.width !== pixelWidth || surface.draftCanvas.height !== pixelHeight) {
+      surface.draftCanvas.width = pixelWidth;
+      surface.draftCanvas.height = pixelHeight;
+    }
+
+    const context = surface.draftContext;
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.clearRect(0, 0, pixelWidth, pixelHeight);
+    context.setTransform(backingScale, 0, 0, backingScale, 0, 0);
+
+    const points = surface.shapePreview ?? builder.preview(this.simplifyStrokesEnabled());
+    if (!points.length) return;
+    const mapper = this.mapper(surface);
+    const viewPoints = points.map((point) => mapper.toViewport(point));
+    const style = builder.style;
+    const latest = points.at(-1)!;
+    const preferences = this.options.settings.toolPreferences[style.tool];
+    const scale = this.displayScale(surface);
+    const pressure = preferences.pressureSensitivity ? Math.max(0.2, latest.pressure) : 1;
+    const widthScale = style.tool === "highlighter" ? 1 : 0.65 + pressure * 0.35;
+
+    context.save();
+    context.globalAlpha = style.tool === "pencil" ? style.opacity * 0.72 : style.opacity;
+    context.strokeStyle = style.color;
+    context.fillStyle = style.color;
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.lineWidth = Math.max(style.tool === "highlighter" ? 2 : 0.5, style.width * scale * widthScale);
+    const first = viewPoints[0]!;
+    if (viewPoints.length === 1) {
+      context.beginPath();
+      context.arc(first.x, first.y, context.lineWidth / 2, 0, Math.PI * 2);
+      context.fill();
+    } else {
+      context.beginPath();
+      context.moveTo(first.x, first.y);
+      for (const point of viewPoints.slice(1)) context.lineTo(point.x, point.y);
+      context.stroke();
+    }
+    context.restore();
+  }
+
+  /**
+   * Erasing the display bitmap is O(new input samples), while exact stroke
+   * fragmentation is O(stroke segments × full eraser path). The exact model
+   * update still happens once at pointer-up; cancel/repaint restores this
+   * disposable bitmap immediately.
+   */
+  private renderLiveEraserPreview(surface: PageSurface): void {
+    const eraserSize = surface.eraserSize;
+    if (eraserSize === undefined || surface.editPath.length === 0) return;
+    const layout = this.pageLayout(surface);
+    const rect = surface.overlay.getBoundingClientRect();
+    const width = Math.max(1, rect.width >= 8 ? rect.width : layout.contentWidth || 1);
+    const height = Math.max(1, rect.height >= 8 ? rect.height : layout.contentHeight || 1);
+    const { pixelWidth, pixelHeight, backingScale } = inkBackingSize(width, height, window.devicePixelRatio || 1);
+    if (surface.canvas.width !== pixelWidth || surface.canvas.height !== pixelHeight) {
+      this.renderPage(surface.page.pageNumber, undefined, "live-eraser-rebase", false, false);
+      surface.liveEraserPaintedPoints = 0;
+    }
+
+    if (surface.liveEraserPaintedPoints >= surface.editPath.length) return;
+    // Continue from the prior endpoint so each new packet erases the capsule
+    // between frames instead of leaving a visible gap at the frame boundary.
+    const pending = surface.editPath.slice(Math.max(0, surface.liveEraserPaintedPoints - 1));
+    const mapper = this.mapper(surface);
+    const points = pending.map((point) => mapper.toViewport(point));
+    const context = surface.context;
+    context.save();
+    context.setTransform(backingScale, 0, 0, backingScale, 0, 0);
+    context.globalAlpha = 1;
+    context.globalCompositeOperation = "destination-out";
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.lineWidth = Math.max(1, eraserSize * this.displayScale(surface));
+    const first = points[0]!;
+    context.beginPath();
+    if (points.length === 1) {
+      context.arc(first.x, first.y, context.lineWidth / 2, 0, Math.PI * 2);
+      context.fill();
+    } else {
+      context.moveTo(first.x, first.y);
+      for (const point of points.slice(1)) context.lineTo(point.x, point.y);
+      context.stroke();
+    }
+    context.restore();
+    surface.liveEraserPaintedPoints = surface.editPath.length;
+  }
+
   private pointerStart(surface: PageSurface, samples: PointerSample[], route: "draw" | "edit" | "text", event: PointerEvent): void {
     const preferences = this.options.settings.toolPreferences;
     const activeTool = this.activeTool();
@@ -1709,7 +1989,7 @@ export class ViewerInkSession {
     // Selected annotations take priority over the current tool. Otherwise, the
     // text tool turns a drag in an existing selection into a new-text intent.
     if (this.tryStartSelectionMove(surface, samples[0]!)) {
-      this.renderPage(surface.page.pageNumber);
+      this.scheduleLivePaint(surface, "edit", samples.length, event, true);
       return;
     }
     if (route === "text") {
@@ -1745,7 +2025,7 @@ export class ViewerInkSession {
           inputType: event.pointerType === "pen" ? "pen" : "mouse",
           stabilization: "medium"
         });
-        for (const sample of samples) surface.builder.add(this.toPdfPoint(surface, sample, false));
+        for (const point of this.toPdfPoints(surface, samples, false)) surface.builder.add(point);
         this.trimLaserDraft(surface, performance.now());
         const first = surface.builder.preview(true)[0];
         if (first) {
@@ -1768,7 +2048,7 @@ export class ViewerInkSession {
           inputType: event.pointerType === "pen" ? "pen" : "mouse",
           stabilization: drawing.stabilization
         });
-        for (const sample of samples) surface.builder.add(this.toPdfPoint(surface, sample, drawing.simulateMousePressure));
+        for (const point of this.toPdfPoints(surface, samples, drawing.simulateMousePressure)) surface.builder.add(point);
         const first = surface.builder.preview(this.simplifyStrokesEnabled())[0];
         if (first) {
           this.lastPointerPdf = { x: first.x, y: first.y };
@@ -1792,10 +2072,12 @@ export class ViewerInkSession {
       surface.editTool = activeTool === "eraser" || this.isRightMouseEraser(event) ? "eraser" : "lasso";
       surface.eraserSize = surface.editTool === "eraser" ? preferences.eraser.size : undefined;
       surface.eraserWholeStrokes = surface.editTool === "eraser" ? preferences.eraser.eraseWholeStrokes : undefined;
-      surface.editPath = samples.map((sample) => this.toPdfPoint(surface, sample, true));
+      surface.editPath = this.toPdfPoints(surface, samples, true);
+      surface.liveEraserPaintedPoints = 0;
       if (surface.editPath[0]) this.lastPointerPdf = { x: surface.editPath[0].x, y: surface.editPath[0].y };
     }
-    this.renderPage(surface.page.pageNumber);
+    if (route === "draw" && !surface.laserDraft) this.scheduleLivePaint(surface, "draw", samples.length, event);
+    else if (route === "edit") this.scheduleLivePaint(surface, "edit", samples.length, event);
   }
 
   private pointerMove(surface: PageSurface, samples: PointerSample[], route: "draw" | "edit" | "text", event: PointerEvent): void {
@@ -1806,8 +2088,7 @@ export class ViewerInkSession {
       this.movePreview = translateStrokes(this.moveDrag.before, dx, dy);
       this.moveTextPreview = this.translateTextAnnotations(this.moveDrag.beforeTexts, dx, dy);
       this.moveShapePreview = translateShape(this.moveDrag.beforeShape, dx, dy);
-      this.updateDebug(surface, event);
-      this.renderPage(surface.page.pageNumber);
+      this.scheduleLivePaint(surface, "edit", samples.length, event, true);
       return;
     }
     if (route === "text") {
@@ -1820,7 +2101,7 @@ export class ViewerInkSession {
         : this.options.settings.toolPreferences[
           resolveDrawingTool(this.activeTool())
         ].simulateMousePressure;
-      const points = samples.map((sample) => this.toPdfPoint(surface, sample, simulate));
+      const points = this.toPdfPoints(surface, samples, simulate);
       for (const point of points) surface.builder.add(point);
       const lastPoint = points.at(-1);
       if (lastPoint) this.resizeLockedShape(surface, lastPoint);
@@ -1832,15 +2113,15 @@ export class ViewerInkSession {
       }
       if (isDrawingTool(this.activeTool()) && !surface.shapeResize) this.scheduleHeldShape(surface);
     } else if (route === "edit") {
-      surface.editPath.push(...samples.map((sample) => this.toPdfPoint(surface, sample, true)));
+      surface.editPath.push(...this.toPdfPoints(surface, samples, true));
     }
-    this.updateDebug(surface, event);
     // The laser fade loop owns live laser painting. Rendering each pointer event
     // duplicates full-canvas work and falls behind high-rate stylus input.
-    if (!surface.laserDraft) this.renderPage(surface.page.pageNumber);
+    if (!surface.laserDraft) this.scheduleLivePaint(surface, route === "draw" ? "draw" : "edit", samples.length, event);
   }
 
   private pointerEnd(surface: PageSurface, samples: PointerSample[], route: "draw" | "edit" | "text", event: PointerEvent): void {
+    this.cancelLivePaint(surface);
     if (this.moveDrag?.page === surface.page.pageNumber) {
       const current = this.toPdfPoint(surface, samples.at(-1)!, true);
       const dx = current.x - this.moveDrag.start.x;
@@ -1887,7 +2168,7 @@ export class ViewerInkSession {
         : this.options.settings.toolPreferences[
           resolveDrawingTool(this.activeTool())
         ].simulateMousePressure;
-      const points = samples.map((sample) => this.toPdfPoint(surface, sample, simulate));
+      const points = this.toPdfPoints(surface, samples, simulate);
       for (const point of points) surface.builder.add(point);
       const lastPoint = points.at(-1);
       if (lastPoint) this.resizeLockedShape(surface, lastPoint);
@@ -1945,19 +2226,21 @@ export class ViewerInkSession {
       const last = samples.at(-1);
       if (last) this.logPositionAlign(surface, last, "end");
     } else if (route === "edit") {
-      surface.editPath.push(...samples.map((sample) => this.toPdfPoint(surface, sample, true)));
+      surface.editPath.push(...this.toPdfPoints(surface, samples, true));
       const tool = this.options.settings.toolPreferences.activeTool;
       const phase = tool === "eraser" ? "eraser" : "lasso";
       const path = [...surface.editPath];
       this.finishEdit(surface);
       this.logDraw(surface, phase, tool, path);
       surface.editPath = [];
+      surface.liveEraserPaintedPoints = 0;
     }
     this.updateDebug(surface, event);
     if (this.needsPagePaint(surface.page.pageNumber)) this.renderPage(surface.page.pageNumber);
   }
 
   private pointerCancel(surface: PageSurface, route: "draw" | "edit" | "text", event: PointerEvent): void {
+    this.cancelLivePaint(surface);
     if (route === "text") {
       this.logText(surface, "pointer-cancel", {
         annotationId: this.textMoveDrag?.before.id ?? surface.textIntent?.hit?.id ?? null,
@@ -1979,6 +2262,7 @@ export class ViewerInkSession {
     surface.laserDraft = false;
     surface.laserDiscardedPoints = 0;
     surface.editPath = [];
+    surface.liveEraserPaintedPoints = 0;
     surface.editTool = undefined;
     surface.eraserSize = undefined;
     surface.eraserWholeStrokes = undefined;
@@ -3553,10 +3837,13 @@ export class ViewerInkSession {
   private renderPage(
     pageNumber: number,
     stats?: { canvasesResized: number; strokesRedrawn: number },
-    reason = ""
+    reason = "",
+    syncText = true,
+    includeActivePreview = true
   ): void {
     const surface = this.surfaces.get(pageNumber);
     if (!surface || this.zoomCompositing) return;
+    this.clearLiveDrawPreview(surface);
     const layout = this.pageLayout(surface);
     this.syncOverlayLayout(surface);
     const rect = surface.overlay.getBoundingClientRect();
@@ -3571,11 +3858,14 @@ export class ViewerInkSession {
     const needsResize = surface.canvas.width !== pixelWidth || surface.canvas.height !== pixelHeight;
     const canBlit = typeof surface.context.drawImage === "function";
     const zoomish = ViewerInkSession.isZoomPaintReason(reason);
-    const erasingLive = surface.editTool === "eraser" && surface.eraserSize !== undefined && surface.editPath.length > 0;
+    const erasingLive = includeActivePreview
+      && surface.editTool === "eraser"
+      && surface.eraserSize !== undefined
+      && surface.editPath.length > 0;
     const movingSelection = Boolean(this.movePreview?.length);
-    const livePreview = Boolean(surface.builder?.preview().length)
+    const livePreview = includeActivePreview && (Boolean(surface.builder?.preview().length)
       || (surface.editTool === "lasso" && surface.editPath.length > 0)
-      || Boolean(this.selectionShape && this.selectionPage === pageNumber);
+      || Boolean(this.selectionShape && this.selectionPage === pageNumber));
 
     // pages-dom storms + idle zoomed pages: layout sync only — skip giant canvas blit.
     if (
@@ -3700,7 +3990,7 @@ export class ViewerInkSession {
     } else if (drawingSelection && this.selectionShape) {
       this.drawSelectionShape(surface, this.moveShapePreview ?? this.selectionShape, { closeFreeform: true });
     }
-    if (surface.builder?.preview().length) {
+    if (includeActivePreview && surface.builder?.preview().length) {
       if (surface.laserDraft) {
         const laser = this.options.settings.toolPreferences.laser;
         this.paintLaserPoints(
@@ -3730,7 +4020,7 @@ export class ViewerInkSession {
       }
     }
     this.paintLaserTrails(surface, pageNumber);
-    this.renderTextAnnotations(surface);
+    if (syncText) this.renderTextAnnotations(surface);
   }
 
   private paintLaserPoints(
@@ -4033,18 +4323,30 @@ export class ViewerInkSession {
     context.restore();
   }
 
-  private toPdfPoint(surface: PageSurface, sample: PointerSample, simulateMousePressure: boolean): PdfPoint {
+  private toPdfPoints(
+    surface: PageSurface,
+    samples: readonly PointerSample[],
+    simulateMousePressure: boolean
+  ): PdfPoint[] {
     const overlayRect = surface.overlay.getBoundingClientRect();
-    const viewport = { x: sample.clientX - overlayRect.left, y: sample.clientY - overlayRect.top };
-    const point = this.mapper(surface).toPdf(viewport);
-    const pressure = sample.pressure > 0 ? sample.pressure : simulateMousePressure ? 0.5 : 1;
-    return { x: point.x, y: point.y, pressure, tiltX: sample.tiltX, tiltY: sample.tiltY, time: sample.timeStamp };
+    const mapper = this.mapper(surface);
+    return samples.map((sample) => {
+      const viewport = { x: sample.clientX - overlayRect.left, y: sample.clientY - overlayRect.top };
+      const point = mapper.toPdf(viewport);
+      const pressure = sample.pressure > 0 ? sample.pressure : simulateMousePressure ? 0.5 : 1;
+      return { x: point.x, y: point.y, pressure, tiltX: sample.tiltX, tiltY: sample.tiltY, time: sample.timeStamp };
+    });
+  }
+
+  private toPdfPoint(surface: PageSurface, sample: PointerSample, simulateMousePressure: boolean): PdfPoint {
+    return this.toPdfPoints(surface, [sample], simulateMousePressure)[0]!;
   }
 
   private projectInkScreenPoint(surface: PageSurface, clientX: number, clientY: number): { x: number; y: number } {
     const overlayRect = surface.overlay.getBoundingClientRect();
     const viewport = { x: clientX - overlayRect.left, y: clientY - overlayRect.top };
-    const projected = this.mapper(surface).toViewport(this.mapper(surface).toPdf(viewport));
+    const mapper = this.mapper(surface);
+    const projected = mapper.toViewport(mapper.toPdf(viewport));
     return { x: overlayRect.left + projected.x, y: overlayRect.top + projected.y };
   }
 
@@ -4053,6 +4355,7 @@ export class ViewerInkSession {
     sample: PointerSample,
     phase: "move" | "start" | "end"
   ): void {
+    if (!this.logger.shouldLogPositionAlign(phase)) return;
     const pageRect = surface.page.element.getBoundingClientRect();
     const overlayRect = surface.overlay.getBoundingClientRect();
     const layout = this.pageLayout(surface);
@@ -4226,6 +4529,20 @@ export class ViewerInkSession {
   private async persist(snapshot: SidecarSchemaV1, reason = "autosave"): Promise<void> {
     const strokeCount = countSidecarStrokes(snapshot);
     const textCount = countSidecarTexts(snapshot);
+    const started = performance.now();
+    let recoveryWriteMs: number | null = null;
+    let sidecarWriteMs: number | null = null;
+    let recoveryClearMs: number | null = null;
+    const reportPersist = (outcome: string): void => this.reportDevProbe("sidecar-persist", {
+      reason,
+      outcome,
+      durationMs: roundMs(performance.now() - started),
+      recoveryWriteMs,
+      sidecarWriteMs,
+      recoveryClearMs,
+      strokeCount,
+      textCount
+    });
     if (!this.stillOwnsPersist()) {
       this.logger.sidecarPersist({
         reason,
@@ -4236,14 +4553,22 @@ export class ViewerInkSession {
         updatedAt: snapshot.updatedAt,
         skipped: this.writesAbandoned ? "abandoned-writer" : "destroyed"
       });
+      reportPersist(this.writesAbandoned ? "skipped-abandoned" : "skipped-destroyed");
       return;
     }
     try {
       // Re-check after each await so emergency sync from another session cannot be overwritten.
-      if (!this.stillOwnsPersist()) return;
-      await this.options.recovery.save(snapshot);
       if (!this.stillOwnsPersist()) {
+        reportPersist("skipped-before-recovery");
+        return;
+      }
+      const recoveryWriteStarted = performance.now();
+      await this.options.recovery.save(snapshot);
+      recoveryWriteMs = roundMs(performance.now() - recoveryWriteStarted);
+      if (!this.stillOwnsPersist()) {
+        const recoveryClearStarted = performance.now();
         await this.options.recovery.clear(this.identity.id).catch(() => undefined);
+        recoveryClearMs = roundMs(performance.now() - recoveryClearStarted);
         this.logger.sidecarPersist({
           reason,
           documentId: this.identity.id,
@@ -4253,9 +4578,12 @@ export class ViewerInkSession {
           updatedAt: snapshot.updatedAt,
           skipped: "abandoned-after-recovery"
         });
+        reportPersist("skipped-after-recovery");
         return;
       }
+      const sidecarWriteStarted = performance.now();
       await this.options.sidecars.save(snapshot);
+      sidecarWriteMs = roundMs(performance.now() - sidecarWriteStarted);
       if (!this.stillOwnsPersist()) {
         this.logger.sidecarPersist({
           reason,
@@ -4266,9 +4594,12 @@ export class ViewerInkSession {
           updatedAt: snapshot.updatedAt,
           skipped: "abandoned-after-sidecar"
         });
+        reportPersist("skipped-after-sidecar");
         return;
       }
+      const recoveryClearStarted = performance.now();
       await this.options.recovery.clear(this.identity.id);
+      recoveryClearMs = roundMs(performance.now() - recoveryClearStarted);
       this.logger.sidecarPersist({
         reason,
         documentId: this.identity.id,
@@ -4277,6 +4608,7 @@ export class ViewerInkSession {
         dirty: false,
         updatedAt: snapshot.updatedAt
       });
+      reportPersist("saved");
     } catch (error) {
       this.logger.sidecarPersist({
         reason,
@@ -4287,6 +4619,7 @@ export class ViewerInkSession {
         updatedAt: snapshot.updatedAt,
         error: this.errorMessage(error)
       });
+      reportPersist("error");
       throw error;
     }
   }

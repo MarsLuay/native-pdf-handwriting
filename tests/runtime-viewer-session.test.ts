@@ -4,6 +4,7 @@ import type { ObsidianPdfAdapter, PdfViewState } from "../src/integration/Obsidi
 import type { PdfPageInfo } from "../src/integration/PdfPageLocator";
 import { DEFAULT_SETTINGS, type InkStroke, type PdfPoint, type PdfTextAnnotation } from "../src/model";
 import { ViewerInkSession } from "../src/runtime/ViewerInkSession";
+import { HN_DEV_PROBE_ACTIVE_KEY, HN_DEV_PROBE_EVENT, type HnDevProbeDiagnostic } from "../src/runtime/DevProbeDiagnostics";
 import { RecoveryRepository } from "../src/storage/RecoveryRepository";
 import { SidecarRepository, type TextFileAdapter } from "../src/storage/SidecarRepository";
 import { createDocumentIdentity } from "../src/storage/DocumentIdentity";
@@ -85,7 +86,10 @@ describe("viewer runtime tracer", () => {
     } as unknown as CanvasRenderingContext2D);
   });
 
-  afterEach(() => document.body.replaceChildren());
+  afterEach(() => {
+    document.body.replaceChildren();
+    vi.restoreAllMocks();
+  });
 
   it("draws a stylus stroke, saves sidecar, exports copy, and cleans up", async () => {
     const source = await PDFDocument.create();
@@ -130,11 +134,26 @@ describe("viewer runtime tracer", () => {
     adapter.pageElement.dispatchEvent(pointer("pointerdown", 100, 120));
     adapter.pageElement.dispatchEvent(pointer("pointermove", 130, 150));
     adapter.pageElement.dispatchEvent(pointer("pointerup", 160, 180));
-    await session.manualSave();
+    const diagnostics: HnDevProbeDiagnostic[] = [];
+    const listener = (event: Event) => diagnostics.push((event as CustomEvent<HnDevProbeDiagnostic>).detail);
+    window.addEventListener(HN_DEV_PROBE_EVENT, listener);
+    (window as Window & { [HN_DEV_PROBE_ACTIVE_KEY]?: boolean })[HN_DEV_PROBE_ACTIVE_KEY] = true;
+    try {
+      await session.manualSave();
+    } finally {
+      delete (window as Window & { [HN_DEV_PROBE_ACTIVE_KEY]?: boolean })[HN_DEV_PROBE_ACTIVE_KEY];
+      window.removeEventListener(HN_DEV_PROBE_EVENT, listener);
+    }
 
     const sidecar = [...files.values.entries()].find(([path]) => path.startsWith("annotations/"));
     expect(sidecar).toBeDefined();
     expect(JSON.parse(sidecar![1]).pages[0].strokes).toHaveLength(1);
+    expect(diagnostics.find((diagnostic) => diagnostic.type === "sidecar-persist")).toMatchObject({
+      metrics: { outcome: "saved", strokeCount: 1, textCount: 0 }
+    });
+    expect(diagnostics.find((diagnostic) => diagnostic.type === "manual-save")).toMatchObject({
+      metrics: { ok: true, durationMs: expect.any(Number) }
+    });
 
     settings.toolPreferences.activeTool = "eraser";
     settings.toolPreferences.eraser.size = 12;
@@ -934,6 +953,7 @@ describe("viewer runtime tracer", () => {
     adapter.toolbarHost.querySelector<HTMLInputElement>("[data-control='draw']")?.click();
     adapter.pageElement.dispatchEvent(pointer("pointerdown", 100, 120));
     adapter.pageElement.dispatchEvent(pointer("pointermove", 180, 220));
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
 
     expect(context.moveTo).toHaveBeenCalled();
     expect(context.lineTo).toHaveBeenCalled();
@@ -1385,5 +1405,52 @@ describe("viewer runtime tracer", () => {
     expect(entry).toBeDefined();
     expect(JSON.parse(entry![1]).pages[0].strokes).toHaveLength(1);
     await reloaded.destroy();
+  });
+
+  it("coalesces live stylus painting without dropping samples or letting a terminal frame go stale", async () => {
+    const frames: FrameRequestCallback[] = [];
+    const requestFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    const files = new MemoryFiles();
+    const adapter = new FakeAdapter();
+    const session = await ViewerInkSession.create({
+      adapter,
+      pdfPath: "Notes/example.pdf",
+      settings: structuredClone(DEFAULT_SETTINGS),
+      sidecars: new SidecarRepository(files, "annotations"),
+      recovery: new RecoveryRepository(files, "recovery"),
+      saveSettings: async () => undefined,
+      readSourcePdf: async () => new Uint8Array(),
+      writeExport: async () => undefined,
+      notice: () => undefined
+    });
+
+    adapter.toolbarHost.querySelector<HTMLInputElement>("[data-control='draw']")?.click();
+    frames.length = 0;
+    requestFrame.mockClear();
+    adapter.pageElement.dispatchEvent(pointer("pointerdown", 100, 120));
+    adapter.pageElement.dispatchEvent(pointer("pointermove", 120, 140));
+    adapter.pageElement.dispatchEvent(pointer("pointermove", 140, 160));
+
+    // One frame owns ink and one owns the independently batched cursor; raw
+    // moves must not add more paint callbacks.
+    expect(requestFrame).toHaveBeenCalledTimes(2);
+    const queuedPaint = frames[0]!;
+    adapter.pageElement.dispatchEvent(pointer("pointerup", 160, 180));
+    const surface = (session as unknown as {
+      surfaces: Map<number, { livePaintFrame: number | null; pendingLivePaint: unknown }>;
+    }).surfaces.get(1)!;
+    expect(surface.livePaintFrame).toBeNull();
+    expect(surface.pendingLivePaint).toBeNull();
+    queuedPaint(0);
+    expect(surface.pendingLivePaint).toBeNull();
+
+    await session.manualSave();
+    const sidecar = [...files.values.entries()].find(([path]) => path.startsWith("annotations/"));
+    expect(JSON.parse(sidecar![1]).pages[0].strokes[0].points).toHaveLength(4);
+    await session.destroy();
   });
 });

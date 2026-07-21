@@ -36,6 +36,19 @@ Copy `manifest.json`, `main.js`, and `styles.css` into your vault plugin folder,
 
 Settings includes **Copy all logs**, which copies the complete vault debug log after it is enabled and an issue is reproduced. The UI is English; annotation files are language-independent.
 
+### Optional real-Obsidian performance probe
+
+For repeatable desktop zoom investigations, build the separate local developer
+plugin at [`../obsidian-dev-probe`](../obsidian-dev-probe). Install it only in
+a disposable development vault alongside HN, start a capture, reproduce a
+zoom/draw/rotate sequence, then export its JSON report.
+
+While capture is active, HN supplies bounded in-process phase diagnostics for
+zoom start/settle/repaint/release, native PDF-page mutations, and sidecar
+persistence. It does not write these diagnostics to the vault, alter source
+PDFs, or emit pointer-move telemetry. With no active probe capture, HN does
+not dispatch those events.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

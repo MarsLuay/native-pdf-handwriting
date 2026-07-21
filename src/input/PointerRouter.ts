@@ -63,6 +63,8 @@ export class PointerRouter {
   private readonly eraserCursor: HTMLElement;
   private readonly drawCursor: HTMLElement;
   private lastCursorClient: { x: number; y: number } | null = null;
+  private pendingCursorUpdate: Pick<PointerEvent, "clientX" | "clientY" | "pointerType"> | null = null;
+  private cursorAnimationFrame: number | null = null;
 
   constructor(
     private readonly element: HTMLElement,
@@ -116,7 +118,7 @@ export class PointerRouter {
 
   private readonly handleDown = (event: PointerEvent): void => {
     if (isAnnotationChromeTarget(event.target)) return;
-    this.updateCustomCursors(event);
+    this.paintCustomCursorsNow(event);
     this.palmPolicy.pointerDown(event);
     if (isStylusEraserInput(event) && this.callbacks.drawingEnabled()) {
       this.stylusErasers.add(event.pointerId);
@@ -149,7 +151,7 @@ export class PointerRouter {
   };
 
   private readonly handleMove = (event: PointerEvent): void => {
-    this.updateCustomCursors(event);
+    this.scheduleCustomCursorUpdate(event);
     const route = this.routed.get(event.pointerId);
     if (route) {
       event.preventDefault();
@@ -162,6 +164,7 @@ export class PointerRouter {
   };
 
   private readonly handleEnd = (event: PointerEvent): void => {
+    this.paintCustomCursorsNow(event);
     const route = this.routed.get(event.pointerId);
     if (route) {
       event.preventDefault();
@@ -193,6 +196,7 @@ export class PointerRouter {
   };
 
   syncToolState(): void {
+    this.cancelScheduledCursorUpdate();
     if (!this.callbacks.drawingEnabled()) {
       this.hideCustomCursors();
       return;
@@ -204,6 +208,7 @@ export class PointerRouter {
   }
 
   refreshCursors(): void {
+    this.cancelScheduledCursorUpdate();
     if (!this.lastCursorClient || !this.callbacks.drawingEnabled()) return;
     const { x, y } = this.lastCursorClient;
     const tool = this.callbacks.activeTool();
@@ -216,6 +221,7 @@ export class PointerRouter {
   }
 
   destroy(): void {
+    this.cancelScheduledCursorUpdate();
     for (const pointerId of this.routed.keys()) {
       if (this.element.hasPointerCapture?.(pointerId)) this.element.releasePointerCapture?.(pointerId);
     }
@@ -285,13 +291,52 @@ export class PointerRouter {
     if (!this.panning.size) this.element.classList.remove("native-pdf-handwriting-panning");
   }
 
-  private updateCustomCursors(event: PointerEvent): void {
+  private scheduleCustomCursorUpdate(event: PointerEvent): void {
+    if (event.pointerType !== "mouse" && event.pointerType !== "pen") {
+      this.paintCustomCursorsNow(event);
+      return;
+    }
+    this.lastCursorClient = { x: event.clientX, y: event.clientY };
+    this.pendingCursorUpdate = {
+      clientX: event.clientX,
+      clientY: event.clientY,
+      pointerType: event.pointerType
+    };
+    if (this.cursorAnimationFrame !== null) return;
+    const view = this.element.ownerDocument.defaultView;
+    if (!view?.requestAnimationFrame) {
+      this.paintScheduledCursorUpdate();
+      return;
+    }
+    this.cursorAnimationFrame = view.requestAnimationFrame(() => this.paintScheduledCursorUpdate());
+  }
+
+  private paintCustomCursorsNow(event: Pick<PointerEvent, "clientX" | "clientY" | "pointerType">): void {
+    this.cancelScheduledCursorUpdate();
+    this.updateCustomCursors(event);
+  }
+
+  private paintScheduledCursorUpdate(): void {
+    this.cursorAnimationFrame = null;
+    const event = this.pendingCursorUpdate;
+    this.pendingCursorUpdate = null;
+    if (event) this.updateCustomCursors(event);
+  }
+
+  private cancelScheduledCursorUpdate(): void {
+    this.pendingCursorUpdate = null;
+    if (this.cursorAnimationFrame === null) return;
+    this.element.ownerDocument.defaultView?.cancelAnimationFrame(this.cursorAnimationFrame);
+    this.cursorAnimationFrame = null;
+  }
+
+  private updateCustomCursors(event: Pick<PointerEvent, "clientX" | "clientY" | "pointerType">): void {
     this.lastCursorClient = { x: event.clientX, y: event.clientY };
     this.updateDrawCursor(event);
     this.updateEraserCursor(event);
   }
 
-  private updateDrawCursor(event: PointerEvent): void {
+  private updateDrawCursor(event: Pick<PointerEvent, "clientX" | "clientY" | "pointerType">): void {
     if (event.pointerType !== "mouse" && event.pointerType !== "pen") {
       this.hideDrawCursor();
       return;
@@ -321,7 +366,7 @@ export class PointerRouter {
     this.element.classList.add("native-pdf-handwriting-has-draw-cursor");
   }
 
-  private updateEraserCursor(event: PointerEvent): void {
+  private updateEraserCursor(event: Pick<PointerEvent, "clientX" | "clientY" | "pointerType">): void {
     if (event.pointerType !== "mouse" && event.pointerType !== "pen") {
       this.hideEraserCursor();
       return;
@@ -354,6 +399,7 @@ export class PointerRouter {
   };
 
   private readonly hideCustomCursors = (): void => {
+    this.cancelScheduledCursorUpdate();
     this.hideEraserCursor();
     this.hideDrawCursor();
   };

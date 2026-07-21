@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.13 — 2026-07-21
+
+- Restore `PluginSettingTab.display()` that renders the same rows as `getSettingDefinitions()`, so settings are not blank on Obsidian 1.12.x (1.13+ still uses the declarative API).
+
 ## 0.1.12 — 2026-07-18
 
 - Keep the right annotation rail at a fixed width so it cannot stretch across the PDF pane.

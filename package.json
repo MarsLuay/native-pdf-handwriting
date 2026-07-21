@@ -1,6 +1,6 @@
 {
   "name": "handwriting-natively",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "PDF handwriting. Use your apple pencil/stylus to write in PDFs natively as the higher powers intended.",
   "main": "main.js",
   "type": "module",

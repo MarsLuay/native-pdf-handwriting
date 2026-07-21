@@ -2,6 +2,7 @@ import type { InkStroke, PdfPoint } from "../model";
 
 type Point = Pick<PdfPoint, "x" | "y">;
 type Interval = readonly [start: number, end: number];
+interface Bounds { minX: number; minY: number; maxX: number; maxY: number; }
 
 export interface SegmentEraserOptions {
   /** Viewport pixels per PDF unit when `size` is expressed in viewport pixels. */
@@ -118,7 +119,36 @@ function interpolate(start: PdfPoint, end: PdfPoint, t: number): PdfPoint {
 
 function samePoint(a: Point, b: Point): boolean { return Math.abs(a.x - b.x) <= EPSILON && Math.abs(a.y - b.y) <= EPSILON; }
 
-function eraseStroke(stroke: InkStroke, path: readonly Point[], radius: number): PdfPoint[][] | null {
+/** One gesture-wide broad phase. It can only admit extra work, never reject contact. */
+function boundsOfPath(path: readonly Point[]): Bounds {
+  const first = path[0]!;
+  let minX = first.x;
+  let minY = first.y;
+  let maxX = first.x;
+  let maxY = first.y;
+  for (let index = 1; index < path.length; index += 1) {
+    const point = path[index]!;
+    minX = Math.min(minX, point.x);
+    minY = Math.min(minY, point.y);
+    maxX = Math.max(maxX, point.x);
+    maxY = Math.max(maxY, point.y);
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+/** A segment outside the path envelope expanded by its collision radius cannot touch any capsule. */
+function segmentMayTouchPath(start: Point, end: Point, pathBounds: Bounds, radius: number): boolean {
+  const minX = Math.min(start.x, end.x);
+  const minY = Math.min(start.y, end.y);
+  const maxX = Math.max(start.x, end.x);
+  const maxY = Math.max(start.y, end.y);
+  return maxX >= pathBounds.minX - radius
+    && minX <= pathBounds.maxX + radius
+    && maxY >= pathBounds.minY - radius
+    && minY <= pathBounds.maxY + radius;
+}
+
+function eraseStroke(stroke: InkStroke, path: readonly Point[], radius: number, pathBounds: Bounds): PdfPoint[][] | null {
   if (stroke.points.length === 0 || path.length === 0) return null;
   if (stroke.points.length === 1) {
     const touched = path.length === 1
@@ -133,9 +163,11 @@ function eraseStroke(stroke: InkStroke, path: readonly Point[], radius: number):
   for (let index = 1; index < stroke.points.length; index += 1) {
     const start = stroke.points[index - 1]!;
     const end = stroke.points[index]!;
-    const erased = path.length === 1
-      ? capsuleIntervals(start, end, path[0]!, path[0]!, radius)
-      : path.slice(1).flatMap((eraserEnd, pathIndex) => capsuleIntervals(start, end, path[pathIndex]!, eraserEnd, radius));
+    const erased = !segmentMayTouchPath(start, end, pathBounds, radius)
+      ? []
+      : path.length === 1
+        ? capsuleIntervals(start, end, path[0]!, path[0]!, radius)
+        : path.slice(1).flatMap((eraserEnd, pathIndex) => capsuleIntervals(start, end, path[pathIndex]!, eraserEnd, radius));
     const removed = mergeIntervals(erased).filter(([from, to]) => to - from > EPSILON);
     if (removed.length > 0) changed = true;
     const preserved = complement(removed);
@@ -160,11 +192,14 @@ export function eraseStrokeSegments(strokes: readonly InkStroke[], path: readonl
   if (!Number.isFinite(size) || size <= 0) throw new RangeError("Eraser size must be positive");
   if (!Number.isFinite(scale) || scale <= 0) throw new RangeError("Coordinate scale must be positive");
   const eraserRadius = size / (2 * scale);
+  const pathBounds = path.length ? boundsOfPath(path) : undefined;
   const kept: InkStroke[] = [];
   const erased: InkStroke[] = [];
   const fragments: InkStroke[] = [];
   for (const stroke of strokes) {
-    const replacementPoints = eraseStroke(stroke, path, eraserRadius + stroke.width / 2);
+    const replacementPoints = pathBounds
+      ? eraseStroke(stroke, path, eraserRadius + stroke.width / 2, pathBounds)
+      : null;
     if (replacementPoints === null) { kept.push(stroke); continue; }
     erased.push(stroke);
     const updatedAt = options.now?.() ?? new Date().toISOString();
@@ -183,13 +218,53 @@ export function eraseStrokeSegments(strokes: readonly InkStroke[], path: readonl
   return { kept, erased, fragments };
 }
 
+/**
+ * Whole-stroke erasing only needs contact, not clipped fragments. Keep this
+ * separate from `eraseStroke` so the hot path can stop at the first actual
+ * (non-tangent) capsule overlap.
+ */
+function strokeIntersectsEraserPath(stroke: InkStroke, path: readonly Point[], radius: number, pathBounds: Bounds): boolean {
+  if (stroke.points.length === 0 || path.length === 0) return false;
+  if (stroke.points.length === 1) {
+    const point = stroke.points[0]!;
+    if (path.length === 1) return Math.hypot(point.x - path[0]!.x, point.y - path[0]!.y) <= radius;
+    return path.slice(1).some((eraserEnd, index) =>
+      capsuleIntervals(point, point, path[index]!, eraserEnd, radius).length > 0
+    );
+  }
+
+  for (let strokeIndex = 1; strokeIndex < stroke.points.length; strokeIndex += 1) {
+    const start = stroke.points[strokeIndex - 1]!;
+    const end = stroke.points[strokeIndex]!;
+    if (!segmentMayTouchPath(start, end, pathBounds, radius)) continue;
+    const intersects = (eraserStart: Point, eraserEnd: Point): boolean =>
+      mergeIntervals(capsuleIntervals(start, end, eraserStart, eraserEnd, radius))
+        .some(([from, to]) => to - from > EPSILON);
+    if (path.length === 1) {
+      if (intersects(path[0]!, path[0]!)) return true;
+      continue;
+    }
+    for (let pathIndex = 1; pathIndex < path.length; pathIndex += 1) {
+      if (intersects(path[pathIndex - 1]!, path[pathIndex]!)) return true;
+    }
+  }
+  return false;
+}
+
 /** Whole-stroke eraser: any contact removes the complete original stroke. */
 export function eraseWholeStrokes(strokes: readonly InkStroke[], path: readonly Point[], size: number, options: SegmentEraserOptions = {}): SegmentEraseResult {
-  const segmented = eraseStrokeSegments(strokes, path, size, options);
-  const erasedIds = new Set(segmented.erased.map((stroke) => stroke.id));
+  const scale = options.scale ?? 1;
+  if (!Number.isFinite(size) || size <= 0) throw new RangeError("Eraser size must be positive");
+  if (!Number.isFinite(scale) || scale <= 0) throw new RangeError("Coordinate scale must be positive");
+  const eraserRadius = size / (2 * scale);
+  const pathBounds = path.length ? boundsOfPath(path) : undefined;
+  const erased = pathBounds
+    ? strokes.filter((stroke) => strokeIntersectsEraserPath(stroke, path, eraserRadius + stroke.width / 2, pathBounds))
+    : [];
+  const erasedIds = new Set(erased.map((stroke) => stroke.id));
   return {
     kept: strokes.filter((stroke) => !erasedIds.has(stroke.id)),
-    erased: segmented.erased,
+    erased,
     fragments: []
   };
 }

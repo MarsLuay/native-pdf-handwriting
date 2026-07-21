@@ -19,6 +19,7 @@ import type { PdfPageInfo } from "../src/integration/PdfPageLocator";
 import { PdfCoordinateMapper } from "../src/pdf/PdfCoordinateMapper";
 import { DEFAULT_SETTINGS, type PdfTextAnnotation } from "../src/model";
 import { ViewerInkSession } from "../src/runtime/ViewerInkSession";
+import { HN_DEV_PROBE_ACTIVE_KEY, HN_DEV_PROBE_EVENT, type HnDevProbeDiagnostic } from "../src/runtime/DevProbeDiagnostics";
 import { RecoveryRepository } from "../src/storage/RecoveryRepository";
 import { SidecarRepository, type TextFileAdapter } from "../src/storage/SidecarRepository";
 
@@ -388,6 +389,36 @@ describe("zoom ink compositing", () => {
     await session.destroy();
   });
 
+  it("publishes HN and host phases only while the Dev Probe opts in", async () => {
+    const adapter = new ZoomAdapter();
+    const session = await createSession(adapter);
+    const received: HnDevProbeDiagnostic[] = [];
+    const listener = (event: Event) => received.push((event as CustomEvent<HnDevProbeDiagnostic>).detail);
+    window.addEventListener(HN_DEV_PROBE_EVENT, listener);
+    (window as Window & { [HN_DEV_PROBE_ACTIVE_KEY]?: boolean })[HN_DEV_PROBE_ACTIVE_KEY] = true;
+    try {
+      vi.useFakeTimers();
+      adapter.zoomTo(1.25, { left: 0, top: 0, width: 750, height: 1_000 });
+      session.onViewStateChange(adapter.getViewState(), "scalechanging");
+      session.onPdfPageContentMutation(2);
+      await vi.advanceTimersByTimeAsync(120);
+
+      expect(received.map((diagnostic) => diagnostic.type)).toEqual(expect.arrayContaining([
+        "zoom-burst-start",
+        "host-page-content-mutation",
+        "zoom-repaint",
+        "zoom-settled"
+      ]));
+      expect(received.find((diagnostic) => diagnostic.type === "host-page-content-mutation")).toMatchObject({
+        metrics: { records: 2, pageCount: 1 }
+      });
+    } finally {
+      delete (window as Window & { [HN_DEV_PROBE_ACTIVE_KEY]?: boolean })[HN_DEV_PROBE_ACTIVE_KEY];
+      window.removeEventListener(HN_DEV_PROBE_EVENT, listener);
+      await session.destroy();
+    }
+  });
+
   it("reattaches an overlay removed by a native page redraw without remounting the page", async () => {
     const adapter = new ZoomAdapter();
     const session = await createSession(adapter);
@@ -484,7 +515,7 @@ describe("zoom ink compositing", () => {
     await session.destroy();
   });
 
-  it("resizes inkLayer on settle, blits via drawImage, then rebuilds a warm cache", async () => {
+  it("resizes inkLayer on settle, keeps live draw off the warm cache, then rebuilds it", async () => {
     const adapter = new ZoomAdapter();
     const session = await createSession(adapter);
 
@@ -496,7 +527,11 @@ describe("zoom ink compositing", () => {
     context.drawImage.mockClear();
     adapter.pageElement.dispatchEvent(pointer("pointerdown", 160, 170));
     adapter.pageElement.dispatchEvent(pointer("pointermove", 190, 200));
-    expect(context.drawImage).toHaveBeenCalled();
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    // Active ink is on the disposable draft canvas; it must not re-blit the
+    // committed cache for every pointer event.
+    expect(context.drawImage).not.toHaveBeenCalled();
+    expect(context.lineTo).toHaveBeenCalled();
     expect(probeSurface(session).inkLayerValid).toBe(true);
     expect(probeSurface(session).inkLayer).not.toBeNull();
     adapter.pageElement.dispatchEvent(pointer("pointerup", 190, 200));
@@ -534,7 +569,9 @@ describe("zoom ink compositing", () => {
     context.drawImage.mockClear();
     adapter.pageElement.dispatchEvent(pointer("pointerdown", 200, 220));
     adapter.pageElement.dispatchEvent(pointer("pointermove", 230, 250));
-    expect(context.drawImage).toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(16);
+    expect(context.drawImage).not.toHaveBeenCalled();
+    expect(context.lineTo).toHaveBeenCalled();
     expect(probeSurface(session).inkLayerValid).toBe(true);
 
     await session.destroy();

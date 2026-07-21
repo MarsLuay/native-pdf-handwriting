@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { InkStroke, PdfPoint } from "../src/model";
 import { eraseStrokeSegments, eraseStrokes, eraseWholeStrokes } from "../src/tools/EraserTool";
 
@@ -32,6 +32,23 @@ describe("circular segment eraser", () => {
     expect(result.fragments[1]?.points[0]?.x).toBeCloseTo(7);
   });
 
+  it("keeps sparse distant segments untouched while preserving exact swept-path results", () => {
+    const distant = stroke("distant", Array.from({ length: 300 }, (_, index) => point(index, 100)));
+    const hit = stroke("hit", [point(0, 0), point(10, 0)]);
+    const path = [point(5, -5), point(5, 5)];
+
+    const segments = eraseStrokeSegments([distant, hit], path, 20, { scale: 10, now: () => "after" });
+    expect(segments.erased).toEqual([hit]);
+    expect(segments.kept[0]).toBe(distant);
+    expect(segments.fragments).toHaveLength(2);
+    expect(segments.fragments[0]?.points.at(-1)?.x).toBeCloseTo(3);
+    expect(segments.fragments[1]?.points[0]?.x).toBeCloseTo(7);
+
+    const whole = eraseWholeStrokes([distant, hit], path, 20, { scale: 10 });
+    expect(whole.erased).toEqual([hit]);
+    expect(whole.kept).toEqual([distant]);
+  });
+
   it("stitches preserved portions across original polyline vertices", () => {
     const original = stroke("polyline", [point(0, 0), point(4, 0), point(8, 0), point(12, 0)]);
     const result = eraseStrokeSegments([original], [point(10, 0)], 2, { now: () => "after" });
@@ -63,9 +80,27 @@ describe("circular segment eraser", () => {
     expect(result.fragments).toEqual([]);
   });
 
+  it("whole-stroke erasing stops at contact without creating segment fragments", () => {
+    const original = stroke("line", [point(0, 0), point(10, 0)]);
+    const createFragmentId = vi.fn(() => "unused");
+    const result = eraseWholeStrokes([original], [point(5, -5), point(5, 5)], 2, { createFragmentId });
+
+    expect(result.erased).toEqual([original]);
+    expect(result.kept).toEqual([]);
+    expect(result.fragments).toEqual([]);
+    expect(createFragmentId).not.toHaveBeenCalled();
+  });
+
   it("does not split a stroke at exact tangency", () => {
     const original = stroke("line", [point(0, 0), point(10, 0)]);
     const result = eraseStrokeSegments([original], [point(5, 2)], 2);
+    expect(result.erased).toEqual([]);
+    expect(result.kept).toEqual([original]);
+  });
+
+  it("whole-stroke erasing also ignores exact tangency", () => {
+    const original = stroke("line", [point(0, 0), point(10, 0)]);
+    const result = eraseWholeStrokes([original], [point(5, 2)], 2);
     expect(result.erased).toEqual([]);
     expect(result.kept).toEqual([original]);
   });

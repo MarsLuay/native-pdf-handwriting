@@ -15,6 +15,10 @@ function pointer(type: string, pointerId: number, extra: Record<string, unknown>
   return event;
 }
 
+async function nextAnimationFrame(): Promise<void> {
+  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+}
+
 describe("PointerRouter", () => {
   it("preserves native touch/mouse defaults and captures only routed ink", () => {
     const element = document.createElement("div");
@@ -157,7 +161,7 @@ describe("PointerRouter", () => {
     router.destroy();
   });
 
-  it("shows a circular, scale-adjusted eraser cursor without intercepting hover", () => {
+  it("shows a circular, scale-adjusted eraser cursor without intercepting hover", async () => {
     const element = document.createElement("div");
     element.getBoundingClientRect = () => ({
       x: 100, y: 50, left: 100, top: 50, right: 500, bottom: 650,
@@ -174,6 +178,7 @@ describe("PointerRouter", () => {
     element.dispatchEvent(hover);
     const cursor = document.body.querySelector<HTMLElement>(".native-pdf-handwriting-eraser-cursor");
     expect(hover.defaultPrevented).toBe(false);
+    await nextAnimationFrame();
     expect(cursor).toMatchObject({ hidden: false });
     expect(cursor?.style.width).toBe("36px");
     expect(cursor?.style.height).toBe("36px");
@@ -187,7 +192,7 @@ describe("PointerRouter", () => {
     expect(cursor?.isConnected).toBe(false);
   });
 
-  it("shows a small dot cursor for pen, pencil, highlighter, and laser in draw mode", () => {
+  it("shows a small dot cursor for pen, pencil, highlighter, and laser in draw mode", async () => {
     const element = document.createElement("div");
     element.getBoundingClientRect = () => ({
       x: 100, y: 50, left: 100, top: 50, right: 500, bottom: 650,
@@ -204,6 +209,7 @@ describe("PointerRouter", () => {
     element.dispatchEvent(hover);
     const cursor = document.body.querySelector<HTMLElement>(".native-pdf-handwriting-draw-cursor");
     expect(hover.defaultPrevented).toBe(false);
+    await nextAnimationFrame();
     expect(cursor).toMatchObject({ hidden: false });
     expect(cursor?.style.width).toBe("6px");
     expect(cursor?.style.height).toBe("6px");
@@ -240,7 +246,7 @@ describe("PointerRouter", () => {
     router.destroy();
   });
 
-  it("keeps the eraser cursor anchored to the pointer when the page layout shifts", () => {
+  it("keeps the eraser cursor anchored to the pointer when the page layout shifts", async () => {
     const element = document.createElement("div");
     let left = 100;
     let top = 50;
@@ -258,6 +264,7 @@ describe("PointerRouter", () => {
 
     element.dispatchEvent(pointer("mouse", 8, { eventType: "pointermove", clientX: 130, clientY: 90, buttons: 0 }));
     const cursor = document.body.querySelector<HTMLElement>(".native-pdf-handwriting-eraser-cursor");
+    await nextAnimationFrame();
     expect(cursor?.style.left).toBe("130px");
     expect(cursor?.style.top).toBe("90px");
 
@@ -269,6 +276,29 @@ describe("PointerRouter", () => {
     expect(cursor?.style.top).toBe("90px");
     expect(cursor?.style.width).toBe("48px");
     expect(cursor?.style.height).toBe("48px");
+    router.destroy();
+  });
+
+  it("batches hover cursor projection to one animation frame and keeps the newest position", async () => {
+    const element = document.createElement("div");
+    document.body.append(element);
+    const projectCursor = vi.fn((x: number, y: number) => ({ x, y }));
+    const router = new PointerRouter(element, {
+      activeTool: () => "pen",
+      drawingEnabled: () => true,
+      projectCursor
+    });
+
+    element.dispatchEvent(pointer("mouse", 8, { eventType: "pointermove", clientX: 100, clientY: 200, buttons: 0 }));
+    element.dispatchEvent(pointer("mouse", 8, { eventType: "pointermove", clientX: 110, clientY: 210, buttons: 0 }));
+    element.dispatchEvent(pointer("mouse", 8, { eventType: "pointermove", clientX: 120, clientY: 220, buttons: 0 }));
+    expect(projectCursor).not.toHaveBeenCalled();
+
+    await nextAnimationFrame();
+    const cursor = document.body.querySelector<HTMLElement>(".native-pdf-handwriting-draw-cursor");
+    expect(projectCursor).toHaveBeenCalledTimes(1);
+    expect(cursor?.style.left).toBe("120px");
+    expect(cursor?.style.top).toBe("220px");
     router.destroy();
   });
 

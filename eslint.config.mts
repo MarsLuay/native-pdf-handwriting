@@ -25,4 +25,11 @@ export default defineConfig([
       "obsidianmd/settings-tab/no-deprecated-display": "error",
     },
   },
+  {
+    // Obsidian 1.12.x only paints PluginSettingTab.display(); 1.13+ uses getSettingDefinitions().
+    files: ["src/settings.ts"],
+    rules: {
+      "obsidianmd/settings-tab/no-deprecated-display": "off",
+    },
+  },
 ]);

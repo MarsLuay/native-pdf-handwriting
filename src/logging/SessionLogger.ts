@@ -108,8 +108,11 @@ export class SessionLogger {
 
   constructor(
     private readonly documentPath: string,
-    private readonly vaultLog?: VaultLogSink
+    private readonly vaultLog?: VaultLogSink,
+    private readonly debugEnabled: () => boolean = () => true
   ) {}
+
+  isEnabled(): boolean { return this.debugEnabled(); }
 
   refresh(reason: string, details: Record<string, unknown> = {}): void {
     const now = Date.now();
@@ -222,15 +225,33 @@ export class SessionLogger {
   }
 
   positionAlign(entry: PositionAlignLog): void {
-    if (entry.phase === "move") {
-      this.alignMoveCount += 1;
-      if (this.alignMoveCount !== 1 && this.alignMoveCount % 6 !== 0) return;
-    } else {
-      this.alignMoveCount = 0;
-    }
     this.emit("info", "ink align", {
       document: this.documentPath,
       ...entry
+    });
+  }
+
+  /** Check sampling before callers spend time gathering layout diagnostics. */
+  shouldLogPositionAlign(phase: PositionAlignLog["phase"]): boolean {
+    if (!this.isEnabled()) return false;
+    if (phase === "move") {
+      this.alignMoveCount += 1;
+      return this.alignMoveCount === 1 || this.alignMoveCount % 6 === 0;
+    } else {
+      this.alignMoveCount = 0;
+    }
+    return true;
+  }
+
+  /** Slow live input frames are actionable; normal frames remain silent. */
+  inputPaint(page: number, durationMs: number, kind: "draw" | "edit", sampleCount: number): void {
+    if (!this.isEnabled() || durationMs < 8) return;
+    this.emit(durationMs >= 16 ? "warn" : "info", "ink input paint", {
+      document: this.documentPath,
+      page,
+      kind,
+      durationMs: round(durationMs),
+      sampleCount
     });
   }
 
@@ -463,6 +484,7 @@ export class SessionLogger {
   }
 
   private emit(level: "info" | "warn", event: string, payload: Record<string, unknown>): void {
+    if (!this.isEnabled()) return;
     if (level === "info") console.debug(PREFIX, event, payload);
     else console.warn(PREFIX, event, payload);
     this.vaultLog?.write(level, event, payload);

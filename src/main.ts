@@ -388,6 +388,7 @@ export default class NativePdfInkPlugin extends Plugin {
       simplifyStrokesEnabled: () => this.settings.simplifyStrokes,
       toolbarPlacement: () => this.settings.toolbarPlacement,
       vaultLog: this.vaultDebugLog,
+      debugEnabled: () => this.settings.vaultDebugLog,
       writeSync: createVaultSyncWriter(this.app.vault),
       claimPersistEpoch: (documentId) => this.claimPersistEpoch(documentId),
       livePersistEpoch: (documentId) => this.livePersistEpoch(documentId),
