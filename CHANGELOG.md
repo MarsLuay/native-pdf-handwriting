@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.18 — 2026-07-21
+
+- Mobile: mount ink canvases only for viewport pages (±1) so large textbooks cannot OOM Obsidian Mobile during attach.
+- Urgent create-path breadcrumbs (`session create begin` → `refresh ok`) to pinpoint post-`adapter-ok` crashes.
+
 ## 0.1.17 — 2026-07-21
 
 - Crash breadcrumbs: urgent vault-log flush, `file-open` / `scan-pdf-leaves` / attach-step events, window error handlers.

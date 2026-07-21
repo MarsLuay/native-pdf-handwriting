@@ -461,7 +461,11 @@ export default class NativePdfInkPlugin extends Plugin {
           privateViewer ? { privateViewer, pageWaitMs } : { pageWaitMs }
         );
         await this.vaultDebugLog.writeUrgent("info", "session attach adapter-ok", {
-          document: file.path
+          document: file.path,
+          mobile: Platform.isMobile,
+          phone: Platform.isPhone,
+          domPageCount: adapter.pages().length,
+          currentPage: adapter.getViewState().pageNumber
         });
         session = await this.createInkSession(file, adapter, {
           onDetached: () => {
@@ -598,6 +602,7 @@ export default class NativePdfInkPlugin extends Plugin {
       writeSync: createVaultSyncWriter(this.app.vault),
       claimPersistEpoch: (documentId) => this.claimPersistEpoch(documentId),
       livePersistEpoch: (documentId) => this.livePersistEpoch(documentId),
+      runtimePlatform: () => ({ mobile: Platform.isMobile, phone: Platform.isPhone }),
       ...(options.onDetached ? { onDetached: options.onDetached } : {})
     });
   }

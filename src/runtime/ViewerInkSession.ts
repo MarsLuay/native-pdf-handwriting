@@ -2,6 +2,7 @@ import type { DrawingTool, InkStroke, PdfPoint, PdfTextAnnotation, PdfTextRun, P
 import { isDrawingTool, isInkDrawTool, resolveDrawingTool } from "../model";
 import type { ObsidianPdfAdapter } from "../integration/ObsidianPdfAdapter";
 import type { PdfPageInfo } from "../integration/PdfPageLocator";
+import { selectPagesForInkMount } from "./selectPagesForInkMount";
 import { PointerRouter } from "../input/PointerRouter";
 import { ViewerMousePan, type MousePanPhase } from "../input/ViewerMousePan";
 import { shouldIgnoreSelectionShortcut, parseSelectionShortcut, parseHistoryShortcut, type SelectionShortcutAction } from "../input/SelectionShortcuts";
@@ -100,6 +101,8 @@ export interface ViewerInkSessionOptions {
   /** Monotonic epoch per document so a replaced session cannot overwrite a newer one. */
   claimPersistEpoch?: (documentId: string) => number;
   livePersistEpoch?: (documentId: string) => number;
+  /** Host runtime flags — avoid importing `obsidian` here so unit tests stay portable. */
+  runtimePlatform?: () => { mobile: boolean; phone: boolean };
 }
 
 interface LaserTrail {
@@ -930,10 +933,38 @@ export class ViewerInkSession {
     }
   }
 
+  private runtimePlatform(): { mobile: boolean; phone: boolean } {
+    return this.options.runtimePlatform?.() ?? { mobile: false, phone: false };
+  }
+
   static async create(options: ViewerInkSessionOptions): Promise<ViewerInkSession> {
+    const urgent = async (event: string, payload: Record<string, unknown> = {}): Promise<void> => {
+      const sink = options.vaultLog;
+      if (!sink) return;
+      if (sink.writeUrgent) await sink.writeUrgent("info", event, payload);
+      else sink.write("info", event, payload);
+    };
+    const platform = options.runtimePlatform?.() ?? { mobile: false, phone: false };
+    const domPages = options.adapter.pages();
+    await urgent("session create begin", {
+      document: options.pdfPath,
+      mobile: platform.mobile,
+      phone: platform.phone,
+      domPageCount: domPages.length,
+      toolbarPlacement: options.toolbarPlacement?.() ?? options.settings.toolbarPlacement,
+      boostedPdfZoom: options.settings.boostedPdfZoom
+    });
     const session = new ViewerInkSession(options);
+    await urgent("session create constructor ok", {
+      document: options.pdfPath,
+      mobile: platform.mobile
+    });
     options.adapter.setBoostedZoom?.(options.settings.boostedPdfZoom);
     session.persistEpoch = options.claimPersistEpoch?.(session.identity.id) ?? 1;
+    await urgent("session create sidecar begin", {
+      document: options.pdfPath,
+      documentId: session.identity.id
+    });
     const sidecar = await options.sidecars.load(session.identity.id);
     const recovery = await options.recovery.load(session.identity.id);
     const stored = pickNewerSidecar(sidecar, recovery);
@@ -943,6 +974,18 @@ export class ViewerInkSession {
     const sidecarTexts = countSidecarTexts(sidecar);
     const recoveryTexts = countSidecarTexts(recovery);
     const loadedTexts = countSidecarTexts(stored);
+    await urgent("session create sidecar ok", {
+      document: options.pdfPath,
+      documentId: session.identity.id,
+      sidecarStrokes,
+      sidecarTexts,
+      recoveryStrokes,
+      recoveryTexts,
+      loadedStrokes,
+      loadedTexts,
+      hasSidecar: Boolean(sidecar),
+      hasRecovery: Boolean(recovery)
+    });
     session.logger.sidecarLoad({
       documentId: session.identity.id,
       sidecarStrokes,
@@ -961,7 +1004,17 @@ export class ViewerInkSession {
       for (const stroke of page.strokes) session.ink.add(stroke);
       for (const text of page.texts ?? []) session.texts.add(text);
     }
+    await urgent("session create hydrate ok", {
+      document: options.pdfPath,
+      loadedStrokes,
+      loadedTexts,
+      pagesWithInk: stored?.pages?.length ?? 0
+    });
     options.adapter.mountToolbar(session.toolbar.element, session.currentToolbarPlacement());
+    await urgent("session create toolbar ok", {
+      document: options.pdfPath,
+      toolbarPlacement: session.currentToolbarPlacement()
+    });
     session.logger.sessionAttach({
       scrollRoot: describeScrollElement(options.adapter.scrollElement()),
       panCapture: "document-capture",
@@ -978,7 +1031,21 @@ export class ViewerInkSession {
       persistEpoch: session.persistEpoch
     });
     session.refreshDiagnostics();
+    const mountPages = session.pagesForInkMount(domPages);
+    await urgent("session create refresh begin", {
+      document: options.pdfPath,
+      mobile: platform.mobile,
+      phone: platform.phone,
+      domPageCount: domPages.length,
+      mountPageCount: mountPages.length,
+      mountPages: mountPages.map((page) => page.pageNumber)
+    });
     session.refresh("create");
+    await urgent("session create refresh ok", {
+      document: options.pdfPath,
+      surfaces: session.surfaces.size,
+      mobile: platform.mobile
+    });
     return session;
   }
 
@@ -1006,11 +1073,12 @@ export class ViewerInkSession {
       surfaces: this.surfaces.size
     });
     try {
-      const pages = this.options.adapter.pages();
+      const allPages = this.options.adapter.pages();
+      const pages = this.pagesForInkMount(allPages);
       const live = new Set(pages.map((page) => page.pageNumber));
       for (const [pageNumber, surface] of this.surfaces) {
-        const current = pages.find((page) => page.pageNumber === pageNumber);
-        if (!current) {
+        const current = allPages.find((page) => page.pageNumber === pageNumber) ?? pages.find((page) => page.pageNumber === pageNumber);
+        if (!current || !live.has(pageNumber)) {
           surface.router?.destroy();
           this.releaseInputOwner(surface.page.element);
           this.releaseSurfaceBuffers(surface);
@@ -1044,7 +1112,10 @@ export class ViewerInkSession {
         if (!live.has(pageNumber)) {
           const surface = this.surfaces.get(pageNumber);
           surface?.router?.destroy();
-          if (surface) this.releaseSurfaceBuffers(surface);
+          if (surface) {
+            this.releaseInputOwner(surface.page.element);
+            this.releaseSurfaceBuffers(surface);
+          }
           surface?.overlay.remove();
           this.surfaces.delete(pageNumber);
         }
@@ -1054,6 +1125,15 @@ export class ViewerInkSession {
     } finally {
       this.refreshDepth -= 1;
     }
+  }
+
+  /** Desktop: every DOM page. Mobile: viewport (±1) so canvas alloc cannot OOM the WebView. */
+  private pagesForInkMount(allPages: PdfPageInfo[]): PdfPageInfo[] {
+    return selectPagesForInkMount(allPages, {
+      mobile: this.runtimePlatform().mobile,
+      currentPage: this.options.adapter.getViewState().pageNumber,
+      scrollRoot: this.options.adapter.scrollElement()
+    });
   }
 
   /** Tool/draw-mode swaps update hit-testing/cursors/text chrome without rebuilding ink pixels. */
@@ -1153,6 +1233,8 @@ export class ViewerInkSession {
     this.logger.viewState(state, source);
     if (source === "scroll") {
       if (this.selected.length) this.selectionToolbar.relayout();
+      // Mobile only mounts viewport pages — scroll must remount neighbors.
+      if (this.runtimePlatform().mobile) this.scheduleRefresh("view-scroll-mobile");
       return;
     }
     if (ViewerInkSession.isZoomRepaintSource(source)) {
