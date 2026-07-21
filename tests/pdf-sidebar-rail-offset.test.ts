@@ -128,7 +128,7 @@ describe("pdf sidebar rail offset", () => {
     }
   });
 
-  it("writes the CSS variable on left chrome and clears it for right chrome", () => {
+  it("writes the CSS variable on left chrome and clears it for right chrome", async () => {
     const scope = document.createElement("div");
     const content = document.createElement("div");
     content.className = "pdf-content-container sidebarOpen";
@@ -191,7 +191,7 @@ describe("pdf sidebar rail offset", () => {
     host.append(toolbarHost, content);
     document.body.append(host);
 
-    const adapter = NativePdfViewAdapter.attach(host);
+    const adapter = await NativePdfViewAdapter.attach(host);
     const toolbar = document.createElement("div");
     toolbar.className = "native-pdf-handwriting-toolbar";
     adapter.mountToolbar(toolbar, "left");

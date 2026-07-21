@@ -40,6 +40,16 @@ describe("AttachRetryPolicy", () => {
     expect(policy.canAttempt("other.pdf", now)).toBe(false);
   });
 
+
+  it("recordHardFailure jumps to max cooldown", () => {
+    const policy = new AttachRetryPolicy();
+    const path = "mobile.pdf";
+    const t0 = 10_000;
+    expect(policy.recordHardFailure(path, t0)).toBe(AttachRetryPolicy.MAX_MS);
+    expect(policy.canAttempt(path, t0 + AttachRetryPolicy.MAX_MS - 1)).toBe(false);
+    expect(policy.canAttempt(path, t0 + AttachRetryPolicy.MAX_MS)).toBe(true);
+  });
+
   it("reports soonest live-path wake-up so short rescans cannot skip backoff", () => {
     const policy = new AttachRetryPolicy();
     const t0 = 5_000;

@@ -13,6 +13,7 @@ import {
   type PdfSidebarOffsetReason
 } from "./PdfSidebarRailOffset";
 import type { CompatibilityResult } from "./PdfViewerCompatibility";
+import { PDF_PAGE_SELECTOR } from "./pdfPageSelectors";
 import { installPdfZoomBoost, type PdfZoomBoostHandle } from "./PdfZoomBoost";
 
 const LOG_PREFIX = "[Handwriting Natively]";
@@ -666,11 +667,11 @@ export abstract class BasePdfAdapter implements ObsidianPdfAdapter {
   private nodeContainsPdfPage(node: Node): boolean {
     if (!isHTMLElement(node)) return false;
     if (this.isPdfPageElement(node)) return true;
-    return Boolean(node.querySelector(".page[data-page-number], .pdf-page-view[data-page-number]"));
+    return Boolean(node.querySelector(PDF_PAGE_SELECTOR));
   }
 
   private isPdfPageElement(element: HTMLElement): boolean {
-    return element.matches(".page[data-page-number], .pdf-page-view[data-page-number]");
+    return element.matches(PDF_PAGE_SELECTOR);
   }
 
   private logPageStructureMutations(

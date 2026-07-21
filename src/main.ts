@@ -3,6 +3,7 @@ import {
   MarkdownView,
   Modal,
   Notice,
+  Platform,
   Plugin,
   TFile,
   normalizePath,
@@ -13,6 +14,7 @@ import { EmbeddedPdfAdapter } from "./integration/EmbeddedPdfAdapter";
 import { NativePdfViewAdapter } from "./integration/NativePdfViewAdapter";
 import type { ObsidianPdfAdapter, PdfAdapterCallbacks } from "./integration/ObsidianPdfAdapter";
 import { PdfViewerCompatibility } from "./integration/PdfViewerCompatibility";
+import { describePdfPageDom } from "./integration/pdfPageSelectors";
 import { EmbedAnnotateChrome, findExistingEmbedChrome } from "./focus-view/EmbedAnnotateChrome";
 import { resolvePdfFileFromEmbed } from "./focus-view/embedFocusHelpers";
 import { ViewerInkSession } from "./runtime/ViewerInkSession";
@@ -279,7 +281,12 @@ export default class NativePdfInkPlugin extends Plugin {
       let session: ViewerInkSession | undefined;
       try {
         const privateViewer = await PdfViewerCompatibility.resolvePrivateViewerFromPdfView(view);
-        const adapter = NativePdfViewAdapter.attach(view.containerEl, this.sessionAdapterCallbacks(() => session), privateViewer ? { privateViewer } : {});
+        const pageWaitMs = Platform.isMobile ? 8_000 : 5_000;
+        const adapter = await NativePdfViewAdapter.attach(
+          view.containerEl,
+          this.sessionAdapterCallbacks(() => session),
+          privateViewer ? { privateViewer, pageWaitMs } : { pageWaitMs }
+        );
         session = await this.createInkSession(file, adapter, {
           onDetached: () => {
             const current = this.sessions.get(leaf);
@@ -298,13 +305,23 @@ export default class NativePdfInkPlugin extends Plugin {
         this.sessions.set(leaf, session);
         this.attachRetry.clear(file.path);
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const pagesMissing = message.includes("PDF page nodes missing");
+        const preview = PdfViewerCompatibility.direct(view.containerEl);
         console.warn("[Handwriting Natively] PDF view not ready or incompatible", error);
         this.vaultDebugLog.write("warn", "session attach failed", {
           document: file.path,
-          error: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack ?? null : null
+          error: message,
+          stack: error instanceof Error ? error.stack ?? null : null,
+          mobile: Platform.isMobile,
+          phone: Platform.isPhone,
+          pagesMissing,
+          ...describePdfPageDom(preview.viewerRoot)
         });
-        const delayMs = this.attachRetry.recordFailure(file.path);
+        // After waiting for pages, keep mobile from re-attach-storming large PDFs.
+        const delayMs = pagesMissing && Platform.isMobile
+          ? this.attachRetry.recordHardFailure(file.path)
+          : this.attachRetry.recordFailure(file.path);
         this.scheduleDebouncedScan(delayMs);
       } finally {
         this.attachingLeaves.delete(leaf);

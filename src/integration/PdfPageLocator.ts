@@ -1,4 +1,5 @@
 import type { PdfJsViewerLike } from "./PdfViewerCompatibility";
+import { queryPdfPageNodes } from "./pdfPageSelectors";
 import { pdfRenderCanvas } from "../pdf/PageCoordinateLayout";
 
 export interface PdfPageInfo {
@@ -24,12 +25,13 @@ export class PdfPageLocator {
   constructor(private readonly viewerRoot: HTMLElement, private readonly privateViewer?: PdfJsViewerLike) {}
 
   pages(): PdfPageInfo[] {
-    return Array.from(this.viewerRoot.querySelectorAll<HTMLElement>(".page[data-page-number], .pdf-page-view[data-page-number]"))
-      .map((element) => this.info(element));
+    return queryPdfPageNodes(this.viewerRoot).map((element) => this.info(element));
   }
 
   page(pageNumber: number): PdfPageInfo | undefined {
-    const element = this.viewerRoot.querySelector<HTMLElement>(`.page[data-page-number="${pageNumber}"], .pdf-page-view[data-page-number="${pageNumber}"]`);
+    const element = this.viewerRoot.querySelector<HTMLElement>(
+      `.page[data-page-number="${pageNumber}"], .pdf-page-view[data-page-number="${pageNumber}"]`
+    );
     return element ? this.info(element) : undefined;
   }
 

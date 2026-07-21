@@ -1,3 +1,5 @@
+import { queryPdfPageNodes } from "./pdfPageSelectors";
+
 export interface CompatibilityResult {
   compatible: boolean;
   errors: string[];
@@ -149,8 +151,10 @@ export class PdfViewerCompatibility {
     const warnings: string[] = [];
     const viewerRoot = this.first<HTMLElement>(host, viewerSelectors);
     if (!viewerRoot) errors.push(`PDF viewer root missing; tried ${viewerSelectors.join(", ")}`);
-    const page = viewerRoot?.querySelector<HTMLElement>(".page[data-page-number], .pdf-page-view[data-page-number]");
-    if (viewerRoot && !page) errors.push("PDF page nodes missing; expected .page[data-page-number] or .pdf-page-view[data-page-number]");
+    const page = viewerRoot ? queryPdfPageNodes(viewerRoot)[0] : undefined;
+    if (viewerRoot && !page) {
+      errors.push("PDF page nodes missing; expected .page[data-page-number] or .pdf-page-view[data-page-number]");
+    }
     const toolbarHost = this.first<HTMLElement>(host, toolbarSelectors);
     if (!toolbarHost) warnings.push("Native PDF toolbar host missing; annotation toolbar will mount beside the viewer");
     const privateHost = host as PrivateHost;

@@ -43,6 +43,16 @@ export class AttachRetryPolicy {
   }
 
   /**
+   * Jump straight to max cooldown (e.g. mobile DOM never grew page nodes).
+   * Prevents attach storms that can take down Obsidian Mobile on large PDFs.
+   */
+  recordHardFailure(path: string, now = Date.now()): number {
+    this.delayByPath.set(path, AttachRetryPolicy.MAX_MS);
+    this.notBeforeByPath.set(path, now + AttachRetryPolicy.MAX_MS);
+    return AttachRetryPolicy.MAX_MS;
+  }
+
+  /**
    * Milliseconds until the soonest live-path cooldown expires.
    * `null` when nothing is cooling down.
    */

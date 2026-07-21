@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.15 — 2026-07-21
+
+- Wait for PDF page nodes before attach; soft-fail + hard cooldown on mobile when page DOM is still missing (stops attach-retry storms that crash Obsidian Mobile).
+- Richer `session attach failed` logs (`isMobile`, DOM snapshot). Shared PDF page selectors.
+
 ## 0.1.14 — 2026-07-21
 
 - Set `minAppVersion` to `1.8.9` (actual PDF-viewer floor; matches 0.1.1). Rename plugin field `settings` → `inkSettings` so catalog/`Plugin.settings` (@since 1.13) does not force 1.13. Keep `display()` + `getSettingDefinitions()` for 1.12.x and 1.13+.

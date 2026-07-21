@@ -35,16 +35,16 @@ function compatibleHost(className = "workspace-leaf"): HTMLElement {
 }
 
 describe("PDF adapters", () => {
-  it("fails clearly when direct or embedded selectors change", () => {
+  it("fails clearly when direct or embedded selectors change", async () => {
     const host = document.createElement("div");
-    expect(() => NativePdfViewAdapter.attach(host)).toThrow(/PDF viewer root missing/);
+    await expect(NativePdfViewAdapter.attach(host)).rejects.toThrow(/PDF viewer root missing/);
     expect(() => EmbeddedPdfAdapter.attach(host)).toThrow(/embedded PDF adapter incompatible/);
   });
 
-  it("locates page metrics, mounts shared UI, and reverses cleanup", () => {
+  it("locates page metrics, mounts shared UI, and reverses cleanup", async () => {
     const host = compatibleHost();
     const stateChanges = vi.fn();
-    const adapter = NativePdfViewAdapter.attach(host, { onViewStateChange: stateChanges });
+    const adapter = await NativePdfViewAdapter.attach(host, { onViewStateChange: stateChanges });
     expect(adapter.pages()[0]).toMatchObject({ pageNumber: 1, width: 600, height: 800, scale: 1.5, rotation: 90 });
     const overlay = adapter.mountOverlay(1);
     const toolbar = document.createElement("div");
@@ -58,9 +58,9 @@ describe("PDF adapters", () => {
     expect(stateChanges).toHaveBeenCalledOnce();
   });
 
-  it("replaces stale annotation toolbars when mounting again", () => {
+  it("replaces stale annotation toolbars when mounting again", async () => {
     const host = compatibleHost();
-    const adapter = NativePdfViewAdapter.attach(host);
+    const adapter = await NativePdfViewAdapter.attach(host);
     const stale = document.createElement("div");
     stale.className = "native-pdf-handwriting-toolbar";
     const fresh = document.createElement("div");
@@ -73,10 +73,10 @@ describe("PDF adapters", () => {
     adapter.destroy();
   });
 
-  it("ignores selection toolbar mount inside overlay", () => {
+  it("ignores selection toolbar mount inside overlay", async () => {
     const host = compatibleHost();
     const pageChanges = vi.fn();
-    const adapter = NativePdfViewAdapter.attach(host, { onPagesChanged: pageChanges });
+    const adapter = await NativePdfViewAdapter.attach(host, { onPagesChanged: pageChanges });
     const overlay = adapter.mountOverlay(1);
     const toolbar = document.createElement("div");
     toolbar.className = "native-pdf-handwriting-selection-toolbar";
@@ -86,10 +86,10 @@ describe("PDF adapters", () => {
     adapter.destroy();
   });
 
-  it("ignores annotation overlay mutations when watching page changes", () => {
+  it("ignores annotation overlay mutations when watching page changes", async () => {
     const host = compatibleHost();
     const pageChanges = vi.fn();
-    const adapter = NativePdfViewAdapter.attach(host, { onPagesChanged: pageChanges });
+    const adapter = await NativePdfViewAdapter.attach(host, { onPagesChanged: pageChanges });
     adapter.mountOverlay(1);
     expect(pageChanges).not.toHaveBeenCalled();
     adapter.destroy();
@@ -99,7 +99,7 @@ describe("PDF adapters", () => {
     const host = compatibleHost();
     const pageChanges = vi.fn();
     const pageContentMutations = vi.fn();
-    const adapter = NativePdfViewAdapter.attach(host, {
+    const adapter = await NativePdfViewAdapter.attach(host, {
       onPagesChanged: pageChanges,
       onPageContentMutation: pageContentMutations
     });
@@ -117,7 +117,7 @@ describe("PDF adapters", () => {
     const host = compatibleHost();
     const pageChanges = vi.fn();
     const pageContentMutations = vi.fn();
-    const adapter = NativePdfViewAdapter.attach(host, {
+    const adapter = await NativePdfViewAdapter.attach(host, {
       onPagesChanged: pageChanges,
       onPageContentMutation: pageContentMutations
     });
@@ -146,7 +146,7 @@ describe("PDF adapters", () => {
     const host = compatibleHost();
     const pageChanges = vi.fn();
     const stateChanges = vi.fn();
-    const adapter = NativePdfViewAdapter.attach(host, {
+    const adapter = await NativePdfViewAdapter.attach(host, {
       onPagesChanged: pageChanges,
       onViewStateChange: stateChanges
     });
@@ -159,7 +159,7 @@ describe("PDF adapters", () => {
     adapter.destroy();
   });
 
-  it("discovers embedded PDFs", () => {
+  it("discovers embedded PDFs", async () => {
     const note = document.createElement("div");
     const embed = document.createElement("div");
     embed.className = "internal-embed";
@@ -172,7 +172,7 @@ describe("PDF adapters", () => {
   it("ignores PDF++ DOM mutations when watching page changes", async () => {
     const host = compatibleHost();
     const pageChanges = vi.fn();
-    const adapter = NativePdfViewAdapter.attach(host, { onPagesChanged: pageChanges });
+    const adapter = await NativePdfViewAdapter.attach(host, { onPagesChanged: pageChanges });
     const page = host.querySelector(".page") as HTMLElement;
     const layer = document.createElement("div");
     layer.className = "pdf-plus-backlink-highlight-layer";
@@ -182,13 +182,13 @@ describe("PDF adapters", () => {
     adapter.destroy();
   });
 
-  it("mounts annotation toolbar after PDF++ color palette", () => {
+  it("mounts annotation toolbar after PDF++ color palette", async () => {
     const host = compatibleHost();
     const toolbarHost = host.querySelector(".pdf-toolbar") as HTMLElement;
     const palette = document.createElement("div");
     palette.className = "pdf-plus-color-palette";
     toolbarHost.append(palette);
-    const adapter = NativePdfViewAdapter.attach(host);
+    const adapter = await NativePdfViewAdapter.attach(host);
     const toolbar = document.createElement("div");
     toolbar.className = "native-pdf-handwriting-toolbar";
     adapter.mountToolbar(toolbar);
@@ -196,7 +196,7 @@ describe("PDF adapters", () => {
     adapter.destroy();
   });
 
-  it("keeps sidebar rail outside the PDF scroll container", () => {
+  it("keeps sidebar rail outside the PDF scroll container", async () => {
     const host = document.createElement("div");
     host.className = "workspace-leaf";
     const toolbarHost = document.createElement("div");
@@ -209,7 +209,7 @@ describe("PDF adapters", () => {
     host.append(toolbarHost, scroll);
     document.body.append(host);
 
-    const adapter = NativePdfViewAdapter.attach(host);
+    const adapter = await NativePdfViewAdapter.attach(host);
     const toolbar = document.createElement("div");
     toolbar.className = "native-pdf-handwriting-toolbar";
     adapter.mountToolbar(toolbar, "left");
@@ -225,7 +225,7 @@ describe("PDF adapters", () => {
     adapter.destroy();
   });
 
-  it("pins right sidebar with chrome grid class even when remounting", () => {
+  it("pins right sidebar with chrome grid class even when remounting", async () => {
     const host = document.createElement("div");
     host.className = "workspace-leaf";
     const toolbarHost = document.createElement("div");
@@ -238,7 +238,7 @@ describe("PDF adapters", () => {
     host.append(toolbarHost, scroll);
     document.body.append(host);
 
-    const adapter = NativePdfViewAdapter.attach(host);
+    const adapter = await NativePdfViewAdapter.attach(host);
     const toolbar = document.createElement("div");
     toolbar.className = "native-pdf-handwriting-toolbar";
     adapter.mountToolbar(toolbar, "left");
@@ -256,7 +256,7 @@ describe("PDF adapters", () => {
 
   it("does not start sidebar tracking for PDF/text style churn when the rail is right", async () => {
     const host = compatibleHost();
-    const adapter = NativePdfViewAdapter.attach(host);
+    const adapter = await NativePdfViewAdapter.attach(host);
     const toolbar = document.createElement("div");
     toolbar.className = "native-pdf-handwriting-toolbar";
     adapter.mountToolbar(toolbar, "left");
