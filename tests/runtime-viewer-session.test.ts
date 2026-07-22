@@ -125,8 +125,16 @@ describe("viewer runtime tracer", () => {
     const nativePointer = pointer("pointerdown", 100, 120);
     adapter.pageElement.dispatchEvent(nativePointer);
     adapter.pageElement.dispatchEvent(pointer("pointerup", 100, 120));
-    // Draw off: stylus tip is captured for drag-scroll (same as mouse).
-    expect(nativePointer.defaultPrevented).toBe(true);
+    // Draw off: mouse/stylus claim is deferred until drag activates (clicks stay native).
+    expect(nativePointer.defaultPrevented).toBe(false);
+
+    const dragDown = pointer("pointerdown", 100, 120);
+    const dragMove = pointer("pointermove", 100, 160);
+    adapter.pageElement.dispatchEvent(dragDown);
+    adapter.pageElement.dispatchEvent(dragMove);
+    adapter.pageElement.dispatchEvent(pointer("pointerup", 100, 160));
+    expect(dragDown.defaultPrevented).toBe(false);
+    expect(dragMove.defaultPrevented).toBe(true);
 
     const draw = adapter.toolbarHost.querySelector<HTMLInputElement>("[data-control='draw']");
     expect(draw).toMatchObject({ checked: false });

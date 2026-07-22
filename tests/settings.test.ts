@@ -62,8 +62,15 @@ describe("safe defaults", () => {
   it("keeps vault debug log off by default", () => {
     expect(DEFAULT_SETTINGS.vaultDebugLog).toBe(false);
     expect(DEFAULT_SETTINGS.vaultDebugLogPath).toBe(
-      "config/plugins/native-pdf-handwriting/debug.log"
+      "config/plugins/native-pdf-handwriting/debug.md"
     );
+  });
+
+  it("migrates vault debug log path from .log to .md", () => {
+    const merged = mergeSettings({
+      vaultDebugLogPath: ".obsidian/plugins/native-pdf-handwriting/debug.log"
+    }, ".obsidian");
+    expect(merged.vaultDebugLogPath).toBe(".obsidian/plugins/native-pdf-handwriting/debug.md");
   });
 
   it("defaults toolbar placement to the PDF bar", () => {

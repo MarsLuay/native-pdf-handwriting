@@ -225,12 +225,12 @@ export class NativePdfInkSettingTab extends PluginSettingTab {
           },
           {
             name: "Vault debug log path",
-            desc: "Vault-relative location for the optional debug log. One JSON object per line.",
+            desc: "Vault-relative location for the optional debug log (Markdown note). One JSON object per line.",
             render: (setting: Setting) => {
               this.addFolderPathInput(setting, {
                 value: this.host.inkSettings.vaultDebugLogPath,
                 persist: async (vaultDebugLogPath) => this.persistPatch({ vaultDebugLogPath }),
-                fileName: "debug.log"
+                fileName: "debug.md"
               });
             }
           },

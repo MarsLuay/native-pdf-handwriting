@@ -2,12 +2,20 @@
 
 ## Unreleased
 
+- Vault debug log default path is `debug.md` (opens as a note); existing `debug.log` settings migrate.
+
+## 0.1.20 — 2026-07-22
+
+- Mobile: leave one-finger scroll to the native PDF viewer when draw is off (no custom touch `scrollBy` pan).
+- Mouse/stylus drag-scroll still uses plugin pan when draw is off and the setting is enabled.
+- Mouse/stylus: defer pointer capture until the drag activates; allow horizontal pan after activation when zoomed.
+
 ## 0.1.19 — 2026-07-21
 
 - Mobile: debounce scroll/pagechanging ink remounts; skip work when mount set unchanged.
 - Mobile: mount current page ±1 via O(1) page lookup (no full-DOM rect scans on scroll).
 - Suppress full ink remount during zoom gesture and CSS handoff; flush remount after release.
-- Draw mode: finger draws instead of panning; touch pan only when draw is off.
+- Draw mode: finger draws instead of panning; custom touch pan disabled while drawing.
 - Mobile: ink toolbar defaults to the left sidebar when placement is PDF toolbar (`main`).
 
 ## 0.1.18 — 2026-07-21

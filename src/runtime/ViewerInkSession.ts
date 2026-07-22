@@ -426,8 +426,8 @@ export class ViewerInkSession {
     const adapter = options.adapter;
     this.viewerMousePan = new ViewerMousePan(adapter.host.ownerDocument, {
       enabled: () => !this.drawEnabled && (this.options.mouseDragScrollEnabled?.() ?? this.options.settings.mouseDragScroll),
-      // Draw mode owns the finger — pan only when ink is off (GoodNotes when draw off).
-      touchPanEnabled: () => !this.drawEnabled,
+      // Fingers: native PDF viewer only. Custom touch pan fights pinch/scroll remounts on phone.
+      touchPanEnabled: () => false,
       scrollRoot: () => adapter.scrollElement(),
       withinTarget: (target) => {
         if (!(target instanceof Element)) return false;
@@ -1912,7 +1912,7 @@ export class ViewerInkSession {
       drawEnabled: this.drawEnabled,
       mouseDragScroll,
       panEnabled: !this.drawEnabled && mouseDragScroll,
-      touchPanEnabled: !this.drawEnabled,
+      touchPanEnabled: false,
       scrollRoot: describeScrollElement(this.options.adapter.scrollElement()),
       ...(reason ? { reason } : {})
     };

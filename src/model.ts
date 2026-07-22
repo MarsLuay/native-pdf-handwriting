@@ -174,7 +174,7 @@ export function createDefaultSettings(configDir: string): PluginSettings {
   hideStylusAnnotationLabel: false,
   toolbarPlacement: "main",
   vaultDebugLog: false,
-  vaultDebugLogPath: `${root}/plugins/${PLUGIN_ID}/debug.log`,
+  vaultDebugLogPath: `${root}/plugins/${PLUGIN_ID}/debug.md`,
   toolPreferences: {
     activeTool: "pen",
     pen: {
@@ -328,8 +328,15 @@ export function mergeSettings(
     }
   };
   merged.sidecarFolder = remapPluginDataPath(cleaned.sidecarFolder, defaults.sidecarFolder, configDir);
-  merged.vaultDebugLogPath = remapPluginDataPath(cleaned.vaultDebugLogPath, defaults.vaultDebugLogPath, configDir);
+  merged.vaultDebugLogPath = migrateVaultDebugLogPath(
+    remapPluginDataPath(cleaned.vaultDebugLogPath, defaults.vaultDebugLogPath, configDir)
+  );
   return merged;
+}
+
+/** Prefer `.md` so the vault log opens as a note in Obsidian. */
+function migrateVaultDebugLogPath(path: string): string {
+  return path.replace(/\/debug\.log$/i, "/debug.md").replace(/^debug\.log$/i, "debug.md");
 }
 
 function remapPluginDataPath(saved: string | undefined, fallback: string, configDir: string): string {

@@ -179,6 +179,78 @@ describe("viewer mouse pan", () => {
     scroller.remove();
   });
 
+  it("defers mouse capture until the drag activates", () => {
+    const setPointerCapture = vi.fn();
+    let scrollTop = 100;
+    const scroller = document.createElement("div");
+    Object.defineProperty(scroller, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(scroller, "clientHeight", { value: 600, configurable: true });
+    Object.defineProperty(scroller, "scrollTop", {
+      get: () => scrollTop,
+      set: (value: number) => { scrollTop = value; }
+    });
+    const canvas = document.createElement("canvas");
+    scroller.append(canvas);
+    document.body.append(scroller);
+    Object.assign(canvas, { setPointerCapture, hasPointerCapture: () => true, releasePointerCapture: vi.fn() });
+
+    const pan = new ViewerMousePan(document, {
+      enabled: () => true,
+      scrollRoot: () => scroller,
+      withinTarget: (target) => target instanceof Node && scroller.contains(target),
+      captureElement: () => scroller
+    });
+
+    canvas.dispatchEvent(pointer("pointerdown", canvas, 40, 100));
+    expect(setPointerCapture).not.toHaveBeenCalled();
+    canvas.dispatchEvent(pointer("pointermove", canvas, 40, 140));
+    expect(setPointerCapture).toHaveBeenCalled();
+    expect(scrollTop).toBe(60);
+    pan.destroy();
+    scroller.remove();
+  });
+
+  it("pans mouse horizontally after a vertical drag activates", () => {
+    let scrollTop = 100;
+    let scrollLeft = 50;
+    const scroller = document.createElement("div");
+    Object.defineProperty(scroller, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(scroller, "clientHeight", { value: 600, configurable: true });
+    Object.defineProperty(scroller, "scrollWidth", { value: 2000, configurable: true });
+    Object.defineProperty(scroller, "clientWidth", { value: 600, configurable: true });
+    Object.defineProperty(scroller, "scrollTop", {
+      get: () => scrollTop,
+      set: (value: number) => { scrollTop = value; }
+    });
+    Object.defineProperty(scroller, "scrollLeft", {
+      get: () => scrollLeft,
+      set: (value: number) => { scrollLeft = value; }
+    });
+    scroller.scrollBy = ((x: number, y: number) => {
+      scrollLeft += x;
+      scrollTop += y;
+    }) as typeof scroller.scrollBy;
+    const canvas = document.createElement("canvas");
+    scroller.append(canvas);
+    document.body.append(scroller);
+    Object.assign(canvas, { setPointerCapture: vi.fn(), hasPointerCapture: () => true, releasePointerCapture: vi.fn() });
+
+    const pan = new ViewerMousePan(document, {
+      enabled: () => true,
+      scrollRoot: () => scroller,
+      withinTarget: (target) => target instanceof Node && scroller.contains(target),
+      captureElement: () => scroller
+    });
+
+    canvas.dispatchEvent(pointer("pointerdown", canvas, 40, 100));
+    canvas.dispatchEvent(pointer("pointermove", canvas, 40, 140));
+    expect(scrollTop).toBe(60);
+    canvas.dispatchEvent(pointer("pointermove", canvas, 10, 140));
+    expect(scrollLeft).toBe(80);
+    pan.destroy();
+    scroller.remove();
+  });
+
   it("pans with one finger when touch pan is enabled even if mouse drag-scroll is off", () => {
     let scrollTop = 100;
     let scrollLeft = 50;

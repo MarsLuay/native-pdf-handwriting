@@ -26,14 +26,14 @@ function createVault(): { vault: Vault; files: Map<string, string> } {
 describe("VaultDebugLog", () => {
   it("flushes all queued events in write order", async () => {
     const { vault, files } = createVault();
-    const log = new VaultDebugLog(() => vault, () => "logs/debug.log", () => true);
+    const log = new VaultDebugLog(() => vault, () => "logs/debug.md", () => true);
 
     log.write("info", "first");
     const firstFlush = log.flush();
     log.write("warn", "second");
     await Promise.all([firstFlush, log.flush()]);
 
-    const events = (files.get("logs/debug.log") ?? "")
+    const events = (files.get("logs/debug.md") ?? "")
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as { event: string });
@@ -43,20 +43,20 @@ describe("VaultDebugLog", () => {
   it("persists events accepted before vault logging is disabled", async () => {
     const { vault, files } = createVault();
     let enabled = true;
-    const log = new VaultDebugLog(() => vault, () => "debug.log", () => enabled);
+    const log = new VaultDebugLog(() => vault, () => "debug.md", () => enabled);
 
     log.write("info", "captured-before-disable");
     enabled = false;
     await log.flush();
 
-    expect(files.get("debug.log")).toContain("captured-before-disable");
+    expect(files.get("debug.md")).toContain("captured-before-disable");
   });
 
   it("merges plugin and Obsidian version context into every event", async () => {
     const { vault, files } = createVault();
     const log = new VaultDebugLog(
       () => vault,
-      () => "debug.log",
+      () => "debug.md",
       () => true,
       () => ({ pluginVersion: "0.1.16", obsidianVersion: "1.8.9" })
     );
@@ -64,7 +64,7 @@ describe("VaultDebugLog", () => {
     log.write("warn", "session attach failed", { document: "a.pdf" });
     await log.flush();
 
-    const event = JSON.parse((files.get("debug.log") ?? "").trim()) as Record<string, unknown>;
+    const event = JSON.parse((files.get("debug.md") ?? "").trim()) as Record<string, unknown>;
     expect(event).toMatchObject({
       event: "session attach failed",
       pluginVersion: "0.1.16",
@@ -77,13 +77,13 @@ describe("VaultDebugLog", () => {
     const { vault, files } = createVault();
     const log = new VaultDebugLog(
       () => vault,
-      () => "debug.log",
+      () => "debug.md",
       () => true,
       () => ({ pluginVersion: "0.1.17" })
     );
 
     await log.writeUrgent("info", "session attach prepare", { document: "big.pdf" });
-    expect(files.get("debug.log")).toContain("session attach prepare");
-    expect(files.get("debug.log")).toContain("0.1.17");
+    expect(files.get("debug.md")).toContain("session attach prepare");
+    expect(files.get("debug.md")).toContain("0.1.17");
   });
 });
